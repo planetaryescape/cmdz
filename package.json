@@ -1,0 +1,15 @@
+{
+  "name": "cmdz",
+  "private": true,
+  "type": "module",
+  "exports": "./src/command.ts",
+  "packageManager": "bun@1.4.0",
+  "scripts": {
+    "dev": "bun run src/main.ts",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@opentui/core": "0.5.10",
+    "effect": "4.0.0-rc.112"
+  }
+}
