@@ -6,10 +6,22 @@
   "packageManager": "bun@1.4.0",
   "scripts": {
     "dev": "bun run src/main.ts",
-    "test": "bun test"
+    "test": "bun test",
+    "typecheck": "tsgo --noEmit",
+    "lint": "oxlint --deny-warnings",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "check": "bun run typecheck && bun run lint && bun run format:check && bun run test"
   },
   "dependencies": {
     "@opentui/core": "0.5.10",
     "effect": "4.0.0-rc.112"
+  },
+  "devDependencies": {
+    "@oxlint/plugins": "1.81.0",
+    "@types/bun": "1.4.1",
+    "@typescript/native-preview": "7.0.0-dev.20260707.2",
+    "oxfmt": "0.66.0",
+    "oxlint": "1.81.0"
   }
 }

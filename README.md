@@ -30,16 +30,16 @@ Effect owns process and renderer cleanup; SIGINT and SIGTERM interrupt the sessi
 ## Configuration
 
 ```ts
-import { Command } from "cmdz";
+import { Command } from 'cmdz'
 
 export default [
-  Command("Web", { command: "bun run dev", cwd: "apps/web" }),
-  Command("Studio", {
-    command: "bun run db:studio",
+  Command('Web', { command: 'bun run dev', cwd: 'apps/web' }),
+  Command('Studio', {
+    command: 'bun run db:studio',
     autostart: false,
-    env: { LOG_LEVEL: "debug" },
+    env: { LOG_LEVEL: 'debug' },
   }),
-];
+]
 ```
 
 Save as `cmdz.ts`. `Command` only creates data. The CLI validates the entire array before opening the UI or spawning processes. Names must be unique and cwd must exist, including for optional commands.
@@ -57,7 +57,17 @@ Direct dependencies:
 - `effect`: `4.0.0-rc.112`
 - `@opentui/core`: `0.5.10`
 
-No additional tooling dependencies are installed. `tsconfig.json` defines strict settings for future type checking; Bun runs TypeScript without checking types. A TypeScript compiler and runtime type packages have not been added.
+Development tooling: tsgo (`@typescript/native-preview`), Bun types, Oxlint with vendored anti-slop rules, and oxfmt using the supplied formatting preferences. Runtime dependencies remain unchanged.
+
+```sh
+bun run check
+```
+
+This runs strict type checking, linting with warnings treated as failures, formatting checks, and tests. Individual commands: `bun run typecheck`, `bun run lint`, `bun run format:check`, and `bun run test`. Use `bun run format` to apply formatting.
+
+Application source remains strictly checked. `skipLibCheck` preserves the previous type-check command's treatment of dependency declarations: OpenTUI's event-emitter override and Effect's `TextDecoderOptions` reference currently fail with full dependency declaration checking.
+
+All generic anti-slop rules and its Effect rule are enabled. See [lint provenance and maintenance](tools/oxlint/README.md).
 
 ## Terminal session
 
@@ -71,7 +81,7 @@ On release, signal the owned process group, wait up to three seconds for the lea
 bun run test
 ```
 
-Integration tests exercise real PTY output, ANSI/Unicode rendering, exit codes, descendant cleanup, focus/input, resize, stop, restart, and natural exit. Separate real-host PTY trials verified quit and SIGTERM cleanup and terminal restoration. Type checking was also run with the existing compiler/types from the local Motel checkout; the repo still has no installed type-checking toolchain.
+Integration tests exercise real PTY output, ANSI/Unicode rendering, exit codes, descendant cleanup, focus/input, resize, stop, restart, and natural exit. Separate real-host PTY trials verified quit and SIGTERM cleanup and terminal restoration. The repository now has a local tsgo type-checking toolchain; it no longer relies on another checkout's compiler.
 
 ## Local telemetry with Motel
 

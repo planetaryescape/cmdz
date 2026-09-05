@@ -42,17 +42,17 @@ Evidence: local SST checkout at commit `74671bf90`, branch `dev`. Findings are f
 ### Public command API
 
 ```ts
-new sst.x.DevCommand("Studio", {
+new sst.x.DevCommand('Studio', {
   dev: {
-    command: "bun run db:studio",
-    directory: "packages/database",
-    title: "Database Studio",
+    command: 'bun run db:studio',
+    directory: 'packages/database',
+    title: 'Database Studio',
     autostart: false,
   },
   environment: {
-    LOG_LEVEL: "debug",
+    LOG_LEVEL: 'debug',
   },
-});
+})
 ```
 
 Relevant fields are `dev.command`, `dev.directory`, `dev.title`, `dev.autostart`, and `environment`. SST calls it `command`, not `script`.
@@ -104,16 +104,16 @@ Evidence: official development guide and upstream `main` source inspected during
 
 ### Documented interactions
 
-| Control | Turborepo behavior |
-| --- | --- |
-| Up/Down or j/k | Select task |
-| m | Show keybind popup |
-| h | Hide/show task list |
-| p | Toggle selection pinning |
-| u/d | Scroll logs |
-| c | Copy highlighted logs |
-| i | Enter task interaction |
-| Ctrl-Z | Leave task interaction |
+| Control        | Turborepo behavior       |
+| -------------- | ------------------------ |
+| Up/Down or j/k | Select task              |
+| m              | Show keybind popup       |
+| h              | Hide/show task list      |
+| p              | Toggle selection pinning |
+| u/d            | Scroll logs              |
+| c              | Copy highlighted logs    |
+| i              | Enter task interaction   |
+| Ctrl-Z         | Leave task interaction   |
 
 Interactive input is associated with interactive task configuration. Persistent development tasks are treated as long-running and interactive. `persistent` is not the same as optional/manual autostart.
 
@@ -135,44 +135,44 @@ The source also contains events for output search and switching between the TUI 
 
 ## 4. Comparison and proposed choices
 
-| Concern | SST Mosaic | Turborepo | cmdz proposal |
-| --- | --- | --- | --- |
-| Primary abstraction | Resource-associated process | Build/dev task | Named local command |
-| Command declaration | `dev.command` | Package script plus task metadata | Explicit command in cmdz config |
-| Optional startup | `autostart: false` | Not established by this case study | First-class manual commands |
-| Main layout | Sidebar and selected terminal | Task list and selected output | Same basic layout |
-| Input mode | Enter to focus | i to interact | Enter to start/focus, Ctrl-Z to return |
-| Status | Running/dead presentation | Task status and result | Distinguish success, failure, and user stop |
-| Help | Contextual hints | Keybind popup | Short hints plus help popup |
-| Sidebar visibility | Fixed in inspected layout | Toggleable | Toggleable |
-| Runner/UI boundary | Pane events plus SST wrappers | Typed event sender/receiver | In-process commands and events |
-| Config updates | Deployment-driven updates | Task/watch integration | Explicitly deferred |
+| Concern             | SST Mosaic                    | Turborepo                          | cmdz proposal                               |
+| ------------------- | ----------------------------- | ---------------------------------- | ------------------------------------------- |
+| Primary abstraction | Resource-associated process   | Build/dev task                     | Named local command                         |
+| Command declaration | `dev.command`                 | Package script plus task metadata  | Explicit command in cmdz config             |
+| Optional startup    | `autostart: false`            | Not established by this case study | First-class manual commands                 |
+| Main layout         | Sidebar and selected terminal | Task list and selected output      | Same basic layout                           |
+| Input mode          | Enter to focus                | i to interact                      | Enter to start/focus, Ctrl-Z to return      |
+| Status              | Running/dead presentation     | Task status and result             | Distinguish success, failure, and user stop |
+| Help                | Contextual hints              | Keybind popup                      | Short hints plus help popup                 |
+| Sidebar visibility  | Fixed in inspected layout     | Toggleable                         | Toggleable                                  |
+| Runner/UI boundary  | Pane events plus SST wrappers | Typed event sender/receiver        | In-process commands and events              |
+| Config updates      | Deployment-driven updates     | Task/watch integration             | Explicitly deferred                         |
 
 ## 5. Proposed configuration API
 
 Selected API: a default-exported array of plain factory results. No generators, global registration, constructor side effects, or top-level await.
 
 ```ts
-import { Command } from "cmdz";
+import { Command } from 'cmdz'
 
 export default [
-  Command("Web", { command: "bun run dev", cwd: "apps/web" }),
-  Command("Studio", { command: "bun run db:studio", autostart: false }),
-];
+  Command('Web', { command: 'bun run dev', cwd: 'apps/web' }),
+  Command('Studio', { command: 'bun run db:studio', autostart: false }),
+]
 ```
 
 `Command` creates a definition only. The CLI imports the config and validates the entire array, including duplicate names and working directories, before creating the renderer or starting any child. Config imports remain trusted executable code; they are not sandboxed. Effect owns execution and cleanup without appearing in user configuration.
 
 Conceptual contract, independent of implementation language:
 
-| Field | Contract | Default |
-| --- | --- | --- |
-| Factory name/ID | Stable, non-empty command ID | Required |
-| command | Non-empty command string | Required |
-| title | Display name, separate from identity | Command ID |
-| cwd | Working directory, relative to config directory or absolute | Config directory |
-| env | String values overlaid on inherited environment | Empty overlay |
-| autostart | Whether to start at session startup | true |
+| Field           | Contract                                                    | Default          |
+| --------------- | ----------------------------------------------------------- | ---------------- |
+| Factory name/ID | Stable, non-empty command ID                                | Required         |
+| command         | Non-empty command string                                    | Required         |
+| title           | Display name, separate from identity                        | Command ID       |
+| cwd             | Working directory, relative to config directory or absolute | Config directory |
+| env             | String values overlaid on inherited environment             | Empty overlay    |
+| autostart       | Whether to start at session startup                         | true             |
 
 ### Environment semantics
 
@@ -225,18 +225,18 @@ Enter start/focus   x stop   r restart   h sidebar   ? help
 
 ### Proposed keybindings
 
-| Key | Navigation behavior |
-| --- | --- |
-| j/k or Up/Down | Select process |
-| Enter | Start idle/exited process, or focus running terminal |
-| x | Stop selected process |
-| r | Restart selected process |
-| h | Hide/show sidebar |
-| ? | Show help |
-| Ctrl-U / Ctrl-D | Scroll half a page |
-| Ctrl-G | Return to live output |
-| Ctrl-L | Clear selected output |
-| Ctrl-C | Shut down cmdz and its children |
+| Key             | Navigation behavior                                  |
+| --------------- | ---------------------------------------------------- |
+| j/k or Up/Down  | Select process                                       |
+| Enter           | Start idle/exited process, or focus running terminal |
+| x               | Stop selected process                                |
+| r               | Restart selected process                             |
+| h               | Hide/show sidebar                                    |
+| ?               | Show help                                            |
+| Ctrl-U / Ctrl-D | Scroll half a page                                   |
+| Ctrl-G          | Return to live output                                |
+| Ctrl-L          | Clear selected output                                |
+| Ctrl-C          | Shut down cmdz and its children                      |
 
 In interactive mode, Ctrl-C goes to the child, not cmdz. Ctrl-Z returns to navigation. Supervisor shortcuts such as `x`, `r`, and Ctrl-L must not intercept ordinary child input in interactive mode.
 
@@ -293,15 +293,15 @@ input -> UI actions -> supervisor -> PTY process groups
 
 ### Module boundaries
 
-| Module | Owns |
-| --- | --- |
-| Config | Loading, validation, defaults, path resolution |
-| Supervisor | Start/stop/restart, run IDs, process groups, exit results |
-| PTY adapter | Spawn, input bytes, output bytes, resize, termination |
+| Module         | Owns                                                            |
+| -------------- | --------------------------------------------------------------- |
+| Config         | Loading, validation, defaults, path resolution                  |
+| Supervisor     | Start/stop/restart, run IDs, process groups, exit results       |
+| PTY adapter    | Spawn, input bytes, output bytes, resize, termination           |
 | Terminal model | ANSI parsing, screen cells, bounded scrollback, follow position |
-| UI state/input | Selection, modes, actions, help, layout |
-| Renderer | Draw state without spawning or killing processes |
-| Application | Startup, event wiring, shutdown, terminal restoration |
+| UI state/input | Selection, modes, actions, help, layout                         |
+| Renderer       | Draw state without spawning or killing processes                |
+| Application    | Startup, event wiring, shutdown, terminal restoration           |
 
 These are module boundaries within a small app, not separate services or a plugin framework.
 
