@@ -3,6 +3,7 @@ import { Cause, Effect, Fiber, Queue } from "effect";
 import type { ProcessDefinition } from "./config";
 import { ProcessPane } from "./process-pane";
 import { runPty } from "./pty-process";
+import { createShortcutHelp } from "./shortcut-help";
 
 type Action =
   | { readonly type: "quit" }
@@ -25,6 +26,8 @@ export const processWorkspace = Effect.fn("process.workspace")(function* (
   row.add(sidebar);
   row.add(body);
   renderer.root.add(footer);
+  const help = createShortcutHelp(renderer);
+  renderer.root.add(help);
   const panes = definitions.map((definition, index) => new ProcessPane(definition, renderer, index));
   let selected = panes[0];
   if (!selected) return;
@@ -34,7 +37,7 @@ export const processWorkspace = Effect.fn("process.workspace")(function* (
     if (!selected || header.isDestroyed || sidebar.isDestroyed || footer.isDestroyed) return;
     const focused = selected.terminal.focused;
     header.content = `cmdz  |  ${selected.definition.title} [${selected.status}]  |  ${focused ? "INPUT" : "NAVIGATION"}`;
-    footer.content = focused ? "Ctrl-Z sidebar  |  Ctrl-C interrupts child" : "j/k select | Enter start/focus | h sidebar | x stop | r restart | q quit";
+    footer.content = focused ? "Ctrl-Z sidebar  |  Ctrl-C interrupts child" : "j/k select | Enter start/focus | h sidebar | x stop | r restart | q quit | ? help";
     sidebar.content = sorted().map((pane) => `${pane === selected ? ">" : " "} ${pane.definition.title}\n  ${pane.status}`).join("\n");
     for (const pane of panes) pane.terminal.zIndex = pane === selected ? 1 : 0;
   };
@@ -44,7 +47,7 @@ export const processWorkspace = Effect.fn("process.workspace")(function* (
   };
   const bindTerminal = (pane: ProcessPane) => {
     pane.terminal.on("focused", () => {
-      if (pane !== selected || pane.status !== "running") pane.terminal.blur();
+      if (help.visible || pane !== selected || pane.status !== "running") pane.terminal.blur();
       drawStatus();
     });
     pane.terminal.on("blurred", drawStatus);
@@ -55,6 +58,12 @@ export const processWorkspace = Effect.fn("process.workspace")(function* (
 
   const onKey = (key: KeyEvent) => {
     if (!selected) return;
+    if (help.visible) {
+      if (key.name === "?" || key.name === "escape") help.visible = false;
+      key.preventDefault();
+      key.stopPropagation();
+      return;
+    }
     if (selected.terminal.focused) {
       if (key.ctrl && key.name === "z") {
         key.preventDefault();
@@ -73,6 +82,8 @@ export const processWorkspace = Effect.fn("process.workspace")(function* (
       const delta = key.name === "j" || key.name === "down" ? 1 : -1;
       const next = order[order.indexOf(selected) + delta];
       if (next) { selected = next; drawStatus(); }
+    } else if (key.name === "?") {
+      help.visible = true;
     } else if (key.name === "h") {
       sidebar.visible = !sidebar.visible;
     } else if (key.name === "x") Queue.offerUnsafe(actions, { type: "stop", pane: selected });
