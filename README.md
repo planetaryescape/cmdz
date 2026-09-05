@@ -38,7 +38,7 @@ The executable embeds Bun and OpenTUI's native library. Users do not need Bun, N
 
 At runtime, the CLI provides `import { Command } from 'cmdz'` to external TypeScript configs, including local helper modules. Other package imports must resolve from the user's project. The virtual module supplies runtime exports, not editor type declarations.
 
-The build targets the host platform. macOS arm64 is verified; Linux and other architectures still need their own build/runtime checks before release. No installers, signing, or publishing are included yet.
+The build targets the host platform. macOS arm64 is verified; Linux and other architectures still need their own build/runtime checks before release. No installers, signing, or publishing are included yet. [GitHub Actions](.github/workflows/ci.yml) builds and smoke-tests all four macOS/Linux targets and uploads binaries with checksums. Those targets remain unverified until their jobs pass. See [release preparation and signing options](docs/releases.md).
 
 ```sh
 bun run test:binary

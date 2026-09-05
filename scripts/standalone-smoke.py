@@ -35,6 +35,7 @@ def trial(binary, project, mode):
     )
     output = bytearray()
     owned_pid = None
+    owned_group = None
 
     def plain_output():
         return re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", bytes(output))
@@ -60,6 +61,7 @@ def trial(binary, project, mode):
     try:
         text(b"READY:standalone")
         owned_pid = int((project / "app" / "child.pid").read_text())
+        owned_group = os.getpgid(owned_pid)
         os.write(master, b"\r")
         text(b"INPUT")
         os.write(master, b"hello\r")
@@ -96,9 +98,9 @@ def trial(binary, project, mode):
             except AssertionError:
                 child.kill()
                 child.wait()
-                if owned_pid is not None:
+                if owned_group is not None:
                     try:
-                        os.killpg(owned_pid, signal.SIGKILL)
+                        os.killpg(owned_group, signal.SIGKILL)
                     except ProcessLookupError:
                         pass
         os.close(master)

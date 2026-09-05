@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            platform: darwin
+            arch: arm64
+          - runner: macos-15-intel
+            platform: darwin
+            arch: x64
+          - runner: ubuntu-24.04
+            platform: linux
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: '1.4.0'
+      - name: Verify native target
+        env:
+          EXPECTED_TARGET: ${{ matrix.platform }}-${{ matrix.arch }}
+        run: bun -e 'if (`${process.platform}-${process.arch}` !== process.env.EXPECTED_TARGET) process.exit(1)'
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+      - run: bun run test:binary
+      - name: Prepare downloadable archive
+        env:
+          ARTIFACT_NAME: cmdz-${{ matrix.platform }}-${{ matrix.arch }}
+        run: |
+          tar -czf "dist/$ARTIFACT_NAME.tar.gz" -C dist cmdz
+          python3 - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          archive = Path('dist') / (os.environ['ARTIFACT_NAME'] + '.tar.gz')
+          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+          archive.with_suffix(archive.suffix + '.sha256').write_text(f'{digest}  {archive.name}\n')
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: cmdz-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            dist/cmdz-*.tar.gz
+            dist/cmdz-*.tar.gz.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
