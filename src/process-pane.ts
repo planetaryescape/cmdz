@@ -18,7 +18,7 @@ export class ProcessPane {
   }
 
   makeTerminal() {
-    return new EmbeddedTerminalRenderable(this.renderer, {
+    const terminal = new EmbeddedTerminalRenderable(this.renderer, {
       id: `terminal-${this.index}-${this.run}`,
       position: "absolute",
       top: 0,
@@ -27,8 +27,11 @@ export class ProcessPane {
       height: "100%",
       maxScrollback: 10000,
       selectable: false,
-      onData: (bytes) => this.pty?.write(bytes),
+      onData: (bytes, source) => {
+        if (source === "response" || (terminal.focused && this.status === "running")) this.pty?.write(bytes);
+      },
       onTerminalResize: (columns, rows) => this.pty?.resize(Math.max(1, columns), Math.max(1, rows)),
     });
+    return terminal;
   }
 }

@@ -28,27 +28,34 @@ export const processWorkspace = Effect.fn("process.workspace")(function* (
   const panes = definitions.map((definition, index) => new ProcessPane(definition, renderer, index));
   let selected = panes[0];
   if (!selected) return;
-  let focused = false;
   const inheritedEnv = { ...process.env };
   const sorted = () => [...panes].sort((a, b) => Number(b.active) - Number(a.active) || a.index - b.index);
   const drawStatus = () => {
-    if (!selected) return;
+    if (!selected || header.isDestroyed || sidebar.isDestroyed || footer.isDestroyed) return;
+    const focused = selected.terminal.focused;
     header.content = `cmdz  |  ${selected.definition.title} [${selected.status}]  |  ${focused ? "INPUT" : "NAVIGATION"}`;
     footer.content = focused ? "Ctrl-Z sidebar  |  Ctrl-C interrupts child" : "j/k select | Enter start/focus | x stop | r restart | q quit";
     sidebar.content = sorted().map((pane) => `${pane === selected ? ">" : " "} ${pane.definition.title}\n  ${pane.status}`).join("\n");
     for (const pane of panes) pane.terminal.zIndex = pane === selected ? 1 : 0;
   };
   const blur = () => {
-    focused = false;
     selected?.terminal.blur();
     drawStatus();
   };
-  for (const pane of panes) body.add(pane.terminal);
+  const bindTerminal = (pane: ProcessPane) => {
+    pane.terminal.on("focused", () => {
+      if (pane !== selected || pane.status !== "running") pane.terminal.blur();
+      drawStatus();
+    });
+    pane.terminal.on("blurred", drawStatus);
+    body.add(pane.terminal);
+  };
+  for (const pane of panes) bindTerminal(pane);
   drawStatus();
 
   const onKey = (key: KeyEvent) => {
     if (!selected) return;
-    if (focused) {
+    if (selected.terminal.focused) {
       if (key.ctrl && key.name === "z") {
         key.preventDefault();
         key.stopPropagation();
@@ -58,7 +65,6 @@ export const processWorkspace = Effect.fn("process.workspace")(function* (
     }
     if (key.name === "return" || key.name === "enter") {
       if (selected.pty) {
-        focused = true;
         selected.terminal.focus();
         drawStatus();
       } else Queue.offerUnsafe(actions, { type: "start", pane: selected });
@@ -118,7 +124,7 @@ export const processWorkspace = Effect.fn("process.workspace")(function* (
     body.remove(pane.terminal);
     pane.terminal.destroy();
     pane.terminal = pane.makeTerminal();
-    body.add(pane.terminal);
+    bindTerminal(pane);
     pane.status = "starting";
     drawStatus();
     const terminal = pane.terminal;

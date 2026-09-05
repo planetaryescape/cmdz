@@ -13,12 +13,15 @@ Run in an interactive terminal. The checked-in `cmdz.ts` starts Demo automatical
 
 - j/k or Up/Down: select a command in the sidebar.
 - Enter: start an idle command, or focus a running command.
+- Click the selected running terminal: enter input mode. Clicking an inactive terminal does not start or focus it.
 - Type a message, `size`, or `exit` in the demo.
 - Ctrl-Z: return to navigation.
 - x: stop the demo.
 - r: restart it with a fresh terminal screen.
 - q or Ctrl-C in navigation: quit cmdz.
 - Ctrl-C in input mode: interrupt the child only.
+
+All keys except Ctrl-Z belong to the child in input mode. Paste is accepted only in input mode; navigation never forwards it to a child.
 
 Effect owns process and renderer cleanup; SIGINT and SIGTERM interrupt the session. Running commands are grouped above inactive ones without changing the selected command.
 
