@@ -1,8 +1,16 @@
 import { Cause, Effect, Exit } from 'effect'
 
+import { Command } from './command'
 import { loadConfig } from './config'
 import { telemetry } from './telemetry'
 import { terminalSession } from './terminal-session'
+
+Bun.plugin({
+  name: 'cmdz-config-api',
+  setup(builder) {
+    builder.module('cmdz', () => ({ loader: 'object', exports: { Command } }))
+  },
+})
 
 const controller = new AbortController()
 const interrupt = () => controller.abort()

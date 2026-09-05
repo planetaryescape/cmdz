@@ -27,6 +27,27 @@ All keys except Ctrl-Z belong to the child in input mode. Paste is accepted only
 
 Effect owns process and renderer cleanup; SIGINT and SIGTERM interrupt the session. Running commands are grouped above inactive ones without changing the selected command.
 
+## Standalone binary
+
+```sh
+bun run build:binary
+./dist/cmdz /path/to/project/cmdz.ts
+```
+
+The executable embeds Bun and OpenTUI's native library. Users do not need Bun, Node, or a local cmdz package to run it. Commands launched by cmdz still need their own runtimes and executables.
+
+At runtime, the CLI provides `import { Command } from 'cmdz'` to external TypeScript configs, including local helper modules. Other package imports must resolve from the user's project. The virtual module supplies runtime exports, not editor type declarations.
+
+The build targets the host platform. macOS arm64 is verified; Linux and other architectures still need their own build/runtime checks before release. No installers, signing, or publishing are included yet.
+
+```sh
+bun run test:binary
+```
+
+This builds the executable, copies it into a temporary project without `node_modules`, and runs PTY checks with no Bun on `PATH`. It verifies config imports, cwd/env, input, initial dimensions, resizing, sidebar toggle, quit/SIGTERM cleanup, and terminal restoration. Python 3 is required only for this developer smoke test.
+
+Compiled startup disables automatic `.env` and `bunfig.toml` loading. Config files remain trusted executable TypeScript.
+
 ## Configuration
 
 ```ts
@@ -50,7 +71,7 @@ Save as `cmdz.ts`. `Command` only creates data. The CLI validates the entire arr
 - `autostart`: defaults to true and is config-only.
 - `env`: overrides the inherited environment. The runner does not load dotenv files; a child such as Bun may apply its own dotenv behavior. `TERM` is set to `xterm-256color` for the embedded terminal.
 
-By default the CLI loads `cmdz.ts` from the launch directory. Use `bun run dev /absolute/path/to/cmdz.ts` for an explicit path. External configs must be able to resolve their own imports. Configuration is trusted TypeScript, not a sandbox. Reloading configuration requires restarting cmdz.
+By default the CLI loads `cmdz.ts` from the launch directory. Use `bun run dev /absolute/path/to/cmdz.ts` for an explicit path. The CLI supplies the `cmdz` import; external configs must resolve any other package imports themselves. Configuration is trusted TypeScript, not a sandbox. Reloading configuration requires restarting cmdz.
 
 Direct dependencies:
 

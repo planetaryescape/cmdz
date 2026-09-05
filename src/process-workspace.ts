@@ -172,6 +172,8 @@ export const processWorkspace = Effect.fn('process.workspace')(function* (
         attach: (value) => {
           pane.pty = value
           if (value) {
+            const size = terminal.screen()
+            value.resize(Math.max(1, size.columns), Math.max(1, size.rows))
             pane.status = 'running'
             drawStatus()
           }
