@@ -12,6 +12,7 @@ bun run dev
 Run in an interactive terminal. The checked-in `cmdz.ts` starts Demo automatically and keeps Optional idle.
 
 - j/k or Up/Down: select a command in the sidebar.
+- h in navigation: hide/show the sidebar. Selection stays unchanged and all terminal panes resize.
 - Enter: start an idle command, or focus a running command.
 - Click the selected running terminal: enter input mode. Clicking an inactive terminal does not start or focus it.
 - Type a message, `size`, or `exit` in the demo.

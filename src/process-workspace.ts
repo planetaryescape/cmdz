@@ -34,7 +34,7 @@ export const processWorkspace = Effect.fn("process.workspace")(function* (
     if (!selected || header.isDestroyed || sidebar.isDestroyed || footer.isDestroyed) return;
     const focused = selected.terminal.focused;
     header.content = `cmdz  |  ${selected.definition.title} [${selected.status}]  |  ${focused ? "INPUT" : "NAVIGATION"}`;
-    footer.content = focused ? "Ctrl-Z sidebar  |  Ctrl-C interrupts child" : "j/k select | Enter start/focus | x stop | r restart | q quit";
+    footer.content = focused ? "Ctrl-Z sidebar  |  Ctrl-C interrupts child" : "j/k select | Enter start/focus | h sidebar | x stop | r restart | q quit";
     sidebar.content = sorted().map((pane) => `${pane === selected ? ">" : " "} ${pane.definition.title}\n  ${pane.status}`).join("\n");
     for (const pane of panes) pane.terminal.zIndex = pane === selected ? 1 : 0;
   };
@@ -73,6 +73,8 @@ export const processWorkspace = Effect.fn("process.workspace")(function* (
       const delta = key.name === "j" || key.name === "down" ? 1 : -1;
       const next = order[order.indexOf(selected) + delta];
       if (next) { selected = next; drawStatus(); }
+    } else if (key.name === "h") {
+      sidebar.visible = !sidebar.visible;
     } else if (key.name === "x") Queue.offerUnsafe(actions, { type: "stop", pane: selected });
     else if (key.name === "r") Queue.offerUnsafe(actions, { type: "restart", pane: selected });
     else if (key.name === "q" || (key.ctrl && key.name === "c")) Queue.offerUnsafe(actions, { type: "quit" });
