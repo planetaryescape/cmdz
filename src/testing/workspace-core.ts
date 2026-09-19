@@ -9,7 +9,12 @@ export class FakeWorkspace {
   private constructor(readonly core: WorkspaceCore) {}
 
   static make(definitions: readonly ProcessDefinition[]) {
-    return Effect.map(makeWorkspaceCore(definitions), (core) => new FakeWorkspace(core))
+    return Effect.gen(function* () {
+      const workspace = new FakeWorkspace(yield* makeWorkspaceCore(definitions))
+      for (const definition of definitions)
+        if (definition.autostart) yield* workspace.start(definition.name)
+      return workspace
+    })
   }
 
   snapshot() {
@@ -31,7 +36,7 @@ export class FakeWorkspace {
     return Effect.gen(function* () {
       const stopping = yield* core.dispatch({ type: 'stop', name })
       const pane = stopping.panes.find((candidate) => candidate.name === name)
-      if (!pane) return stopping
+      if (!pane || pane.status !== 'stopping') return stopping
       return yield* core.dispatch({ type: 'stopped', name, run: pane.run })
     })
   }

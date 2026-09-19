@@ -10,13 +10,17 @@ test('drives a headless command lifecycle without OpenTUI or a child process', a
       const workspace = yield* FakeWorkspace.make([
         { name: 'Web', title: 'Web', command: 'web', cwd: '/', env: {}, autostart: false },
       ])
-      yield* workspace.start('Web')
+      const running = yield* workspace.start('Web')
       workspace.write('Web', new TextEncoder().encode('ready'))
       const finished = yield* workspace.exit('Web', 0)
-      return { finished, output: workspace.output.get('Web') }
+      yield* workspace.start('Web')
+      const failed = yield* workspace.exit('Web', 1)
+      return { running, finished, failed, output: workspace.output.get('Web') }
     }),
   )
 
+  expect(pane(result.running, 'Web')?.status).toBe('running')
   expect(pane(result.finished, 'Web')?.status).toBe('succeeded')
+  expect(pane(result.failed, 'Web')?.status).toBe('failed')
   expect(new TextDecoder().decode(result.output?.[0])).toBe('ready')
 })
