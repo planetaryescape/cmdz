@@ -80,6 +80,30 @@ def trial(binary, project, mode):
         os.write(master, b"wide\r")
         text(b"ECHO:wide")
         if mode == "quit":
+            os.write(master, b"\x1a")
+            text(b"NAVIGATION")
+            del output[:]
+            os.write(master, b"x")
+            text(b"stopped")
+            wait_for(
+                lambda: not Path(f"/proc/{owned_pid}").exists()
+                if sys.platform.startswith("linux")
+                else not process_exists(owned_pid),
+                "stopped process",
+            )
+            previous_pid = owned_pid
+            del output[:]
+            os.write(master, b"r")
+            text(b"running")
+            wait_for(
+                lambda: int((project / "app" / "child.pid").read_text()) != previous_pid,
+                "new process",
+            )
+            owned_pid = int((project / "app" / "child.pid").read_text())
+            owned_group = os.getpgid(owned_pid)
+            assert owned_pid != previous_pid, "Restart reused the previous process"
+            os.write(master, b"\r")
+            text(b"INPUT")
             os.write(master, b"\x1aq")
         else:
             child.send_signal(signal.SIGTERM)
@@ -108,6 +132,14 @@ def trial(binary, project, mode):
                         pass
         os.close(master)
         os.close(slave)
+
+
+def process_exists(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 with tempfile.TemporaryDirectory(prefix="cmdz-standalone-") as directory:
