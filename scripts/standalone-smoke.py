@@ -75,6 +75,7 @@ def trial(binary, project, mode):
         os.write(master, b"\x1ah")
         text(b"RESIZED:32 110")
         os.write(master, b"\r")
+        del output[:]
         text(b"INPUT")
         os.write(master, b"wide\r")
         text(b"ECHO:wide")
