@@ -5,8 +5,38 @@ import { Effect } from 'effect'
 import type { ProcessDefinition } from '../config'
 import { makeWorkspaceCore, type WorkspaceCore, type WorkspaceSnapshot } from '../workspace-core'
 
+class FakeProcess {
+  readonly input: Uint8Array[] = []
+  readonly output: Uint8Array[] = []
+  columns = 80
+  rows = 24
+  active = true
+
+  constructor(
+    readonly name: string,
+    readonly run: number,
+  ) {}
+
+  write(bytes: Uint8Array) {
+    this.input.push(bytes)
+  }
+
+  emit(bytes: Uint8Array) {
+    this.output.push(bytes)
+  }
+
+  resize(columns: number, rows: number) {
+    this.columns = columns
+    this.rows = rows
+  }
+
+  stop() {
+    this.active = false
+  }
+}
+
 class FakeWorkspace {
-  readonly output = new Map<string, Uint8Array[]>()
+  readonly processes = new Map<string, FakeProcess>()
 
   private constructor(readonly core: WorkspaceCore) {}
 
@@ -20,55 +50,209 @@ class FakeWorkspace {
   }
 
   start(name: string) {
-    const { core } = this
+    const { core, processes } = this
     return Effect.gen(function* () {
       const starting = yield* core.dispatch({ type: 'start', name })
-      const pane = starting.panes.find((candidate) => candidate.name === name)
-      if (!pane) throw new Error(`Unknown pane: ${name}`)
+      const pane = findPane(starting, name)
+      const process = new FakeProcess(name, pane.run)
+      processes.set(processKey(name, pane.run), process)
       return {
+        process,
         snapshot: yield* core.dispatch({ type: 'running', name, run: pane.run }),
-        run: pane.run,
       }
     })
   }
 
-  exit(name: string, run: number, code: number) {
-    const { core } = this
+  failStart(name: string) {
+    const { core, processes } = this
     return Effect.gen(function* () {
-      const snapshot = yield* core.snapshot
-      const pane = snapshot.panes.find((candidate) => candidate.name === name)
-      if (!pane) throw new Error(`Unknown pane: ${name}`)
-      return yield* core.dispatch({ type: 'exit', name, run, code })
+      const starting = yield* core.dispatch({ type: 'start', name })
+      const pane = findPane(starting, name)
+      const process = new FakeProcess(name, pane.run)
+      process.stop()
+      processes.set(processKey(name, pane.run), process)
+      return yield* core.dispatch({ type: 'fail', name, run: pane.run })
     })
   }
 
-  write(name: string, output: Uint8Array) {
-    const writes = this.output.get(name) ?? []
-    writes.push(output)
-    this.output.set(name, writes)
+  exit(name: string, run: number, code: number) {
+    this.process(name, run).stop()
+    return this.core.dispatch({ type: 'exit', name, run, code })
+  }
+
+  focus(name: string) {
+    const { core } = this
+    return Effect.gen(function* () {
+      yield* core.dispatch({ type: 'select', name })
+      return yield* core.dispatch({ type: 'input', value: true })
+    })
+  }
+
+  write(name: string, bytes: Uint8Array) {
+    const { core, processes } = this
+    return Effect.gen(function* () {
+      const snapshot = yield* core.snapshot
+      const pane = findPane(snapshot, name)
+      if (snapshot.selected !== name || !snapshot.input || pane.status !== 'running')
+        throw new Error(`Pane is not accepting input: ${name}`)
+      findProcess(processes, name, pane.run).write(bytes)
+    })
+  }
+
+  emit(name: string, bytes: Uint8Array) {
+    const { core, processes } = this
+    return Effect.gen(function* () {
+      const snapshot = yield* core.snapshot
+      const pane = findPane(snapshot, name)
+      findProcess(processes, name, pane.run).emit(bytes)
+    })
+  }
+
+  resize(name: string, columns: number, rows: number) {
+    const { core, processes } = this
+    return Effect.gen(function* () {
+      const snapshot = yield* core.snapshot
+      const pane = findPane(snapshot, name)
+      findProcess(processes, name, pane.run).resize(columns, rows)
+    })
+  }
+
+  stop(name: string) {
+    const { core, processes } = this
+    return Effect.gen(function* () {
+      const stopping = yield* core.dispatch({ type: 'stop', name })
+      const pane = findPane(stopping, name)
+      if (pane.status !== 'stopping') return stopping
+      findProcess(processes, name, pane.run).stop()
+      return yield* core.dispatch({ type: 'stopped', name, run: pane.run })
+    })
+  }
+
+  restart(name: string) {
+    const stop = this.stop(name)
+    const start = this.start(name)
+    return Effect.gen(function* () {
+      const stopped = yield* stop
+      const started = yield* start
+      return { stopped, ...started }
+    })
+  }
+
+  shutdown() {
+    const { core } = this
+    const stop = (name: string) => this.stop(name)
+    return Effect.gen(function* () {
+      const snapshot = yield* core.snapshot
+      for (const pane of snapshot.panes)
+        if (pane.status === 'starting' || pane.status === 'running') yield* stop(pane.name)
+      return yield* core.snapshot
+    })
+  }
+
+  private process(name: string, run: number) {
+    return findProcess(this.processes, name, run)
   }
 }
 
-const pane = (snapshot: WorkspaceSnapshot, name: string) =>
-  snapshot.panes.find((candidate) => candidate.name === name)
+const definition = (name: string, autostart: boolean): ProcessDefinition => ({
+  name,
+  title: name,
+  command: name.toLowerCase(),
+  cwd: '/',
+  env: {},
+  autostart,
+})
 
-test('drives a headless command lifecycle without OpenTUI or a child process', async () => {
+function findPane(snapshot: WorkspaceSnapshot, name: string) {
+  const pane = snapshot.panes.find((candidate) => candidate.name === name)
+  if (!pane) throw new Error(`Unknown pane: ${name}`)
+  return pane
+}
+
+function processKey(name: string, run: number) {
+  return `${name}:${run}`
+}
+
+function findProcess(processes: Map<string, FakeProcess>, name: string, run: number) {
+  const process = processes.get(processKey(name, run))
+  if (!process) throw new Error(`Unknown process run: ${name}:${run}`)
+  return process
+}
+
+test('drives process I/O and dimensions without OpenTUI or an operating-system process', async () => {
   const result = await Effect.runPromise(
     Effect.gen(function* () {
-      const workspace = yield* FakeWorkspace.make([
-        { name: 'Web', title: 'Web', command: 'web', cwd: '/', env: {}, autostart: false },
-      ])
+      const workspace = yield* FakeWorkspace.make([definition('Web', false)])
       const running = yield* workspace.start('Web')
-      workspace.write('Web', new TextEncoder().encode('ready'))
-      const finished = yield* workspace.exit('Web', running.run, 0)
-      const restarted = yield* workspace.start('Web')
-      const failed = yield* workspace.exit('Web', restarted.run, 1)
-      return { running, finished, failed, output: workspace.output.get('Web') }
+      const output = new Uint8Array([0x1b, 0x5b, 0x32, 0x4a])
+      const input = new TextEncoder().encode('reload\n')
+      yield* workspace.emit('Web', output)
+      yield* workspace.focus('Web')
+      yield* workspace.write('Web', input)
+      yield* workspace.resize('Web', 132, 43)
+      const finished = yield* workspace.exit('Web', running.process.run, 0)
+      return { process: running.process, finished, input, output }
     }),
   )
 
-  expect(pane(result.running.snapshot, 'Web')?.status).toBe('running')
-  expect(pane(result.finished, 'Web')?.status).toBe('succeeded')
-  expect(pane(result.failed, 'Web')?.status).toBe('failed')
-  expect(new TextDecoder().decode(result.output?.[0])).toBe('ready')
+  expect(findPane(result.finished, 'Web').status).toBe('succeeded')
+  expect(result.finished.input).toBe(false)
+  expect(result.process.output).toEqual([result.output])
+  expect(result.process.input).toEqual([result.input])
+  expect([result.process.columns, result.process.rows]).toEqual([132, 43])
+  expect(result.process.active).toBe(false)
+})
+
+test('reports a process startup failure', async () => {
+  const snapshot = await Effect.runPromise(
+    Effect.gen(function* () {
+      const workspace = yield* FakeWorkspace.make([definition('Web', false)])
+      return yield* workspace.failStart('Web')
+    }),
+  )
+
+  expect(findPane(snapshot, 'Web').status).toBe('failed')
+})
+
+test('stops and restarts with a fresh run while rejecting stale events', async () => {
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const workspace = yield* FakeWorkspace.make([definition('Web', false)])
+      const first = yield* workspace.start('Web')
+      yield* workspace.emit('Web', new TextEncoder().encode('old run'))
+      const restarted = yield* workspace.restart('Web')
+      yield* workspace.emit('Web', new TextEncoder().encode('new run'))
+      const afterStaleExit = yield* workspace.exit('Web', first.process.run, 9)
+      return { first: first.process, restarted, afterStaleExit }
+    }),
+  )
+
+  expect(findPane(result.restarted.stopped, 'Web').status).toBe('stopped')
+  expect(result.first.active).toBe(false)
+  expect(result.restarted.process.run).toBe(result.first.run + 1)
+  expect(result.restarted.process.output).toEqual([new TextEncoder().encode('new run')])
+  expect(findPane(result.afterStaleExit, 'Web')).toEqual(findPane(result.restarted.snapshot, 'Web'))
+})
+
+test('shuts down every active process and leaves idle processes untouched', async () => {
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const workspace = yield* FakeWorkspace.make([
+        definition('Web', true),
+        definition('Worker', true),
+        definition('Optional', false),
+      ])
+      yield* workspace.focus('Worker')
+      const snapshot = yield* workspace.shutdown()
+      return { processes: Array.from(workspace.processes.values()), snapshot }
+    }),
+  )
+
+  expect(result.snapshot.panes.map(({ name, status }) => [name, status])).toEqual([
+    ['Web', 'stopped'],
+    ['Worker', 'stopped'],
+    ['Optional', 'idle'],
+  ])
+  expect(result.snapshot.input).toBe(false)
+  expect(result.processes.every((process) => !process.active)).toBe(true)
 })
