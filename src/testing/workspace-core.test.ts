@@ -54,8 +54,7 @@ class FakeWorkspace {
     return Effect.gen(function* () {
       const starting = yield* core.dispatch({ type: 'start', name })
       const pane = findPane(starting, name)
-      const process = new FakeProcess(name, pane.run)
-      processes.set(processKey(name, pane.run), process)
+      const process = registerProcess(processes, name, pane.run)
       return {
         process,
         snapshot: yield* core.dispatch({ type: 'running', name, run: pane.run }),
@@ -68,16 +67,19 @@ class FakeWorkspace {
     return Effect.gen(function* () {
       const starting = yield* core.dispatch({ type: 'start', name })
       const pane = findPane(starting, name)
-      const process = new FakeProcess(name, pane.run)
+      const process = registerProcess(processes, name, pane.run)
       process.stop()
-      processes.set(processKey(name, pane.run), process)
       return yield* core.dispatch({ type: 'fail', name, run: pane.run })
     })
   }
 
   exit(name: string, run: number, code: number) {
-    this.process(name, run).stop()
-    return this.core.dispatch({ type: 'exit', name, run, code })
+    const { core, processes } = this
+    return Effect.gen(function* () {
+      const snapshot = yield* core.dispatch({ type: 'exit', name, run, code })
+      processes.get(processKey(name, run))?.stop()
+      return snapshot
+    })
   }
 
   focus(name: string) {
@@ -173,6 +175,14 @@ function processKey(name: string, run: number) {
   return `${name}:${run}`
 }
 
+function registerProcess(processes: Map<string, FakeProcess>, name: string, run: number) {
+  const key = processKey(name, run)
+  if (processes.has(key)) throw new Error(`Process already registered for run: ${key}`)
+  const process = new FakeProcess(name, run)
+  processes.set(key, process)
+  return process
+}
+
 function findProcess(processes: Map<string, FakeProcess>, name: string, run: number) {
   const process = processes.get(processKey(name, run))
   if (!process) throw new Error(`Unknown process run: ${name}:${run}`)
@@ -222,8 +232,9 @@ test('stops and restarts with a fresh run while rejecting stale events', async (
       yield* workspace.emit('Web', new TextEncoder().encode('old run'))
       const restarted = yield* workspace.restart('Web')
       yield* workspace.emit('Web', new TextEncoder().encode('new run'))
+      const afterUnknownExit = yield* workspace.exit('Web', 0, 9)
       const afterStaleExit = yield* workspace.exit('Web', first.process.run, 9)
-      return { first: first.process, restarted, afterStaleExit }
+      return { first: first.process, restarted, afterUnknownExit, afterStaleExit }
     }),
   )
 
@@ -231,7 +242,26 @@ test('stops and restarts with a fresh run while rejecting stale events', async (
   expect(result.first.active).toBe(false)
   expect(result.restarted.process.run).toBe(result.first.run + 1)
   expect(result.restarted.process.output).toEqual([new TextEncoder().encode('new run')])
+  expect(findPane(result.afterUnknownExit, 'Web')).toEqual(
+    findPane(result.restarted.snapshot, 'Web'),
+  )
   expect(findPane(result.afterStaleExit, 'Web')).toEqual(findPane(result.restarted.snapshot, 'Web'))
+})
+
+test('rejects duplicate registration without replacing the active process', async () => {
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const workspace = yield* FakeWorkspace.make([definition('Web', false)])
+      const first = yield* workspace.start('Web')
+      const duplicate = yield* Effect.exit(workspace.start('Web'))
+      return { duplicate, first: first.process, processes: workspace.processes }
+    }),
+  )
+
+  expect(result.duplicate._tag).toBe('Failure')
+  expect(result.processes.size).toBe(1)
+  expect(result.processes.get(processKey('Web', result.first.run))).toBe(result.first)
+  expect(result.first.active).toBe(true)
 })
 
 test('shuts down every active process and leaves idle processes untouched', async () => {
