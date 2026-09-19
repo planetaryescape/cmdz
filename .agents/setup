@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+readonly required_bun_version="1.4.0"
+readonly bun_binary="$HOME/.bun/bin/bun"
+readonly profile_marker="# cmdz Bun toolchain"
+
+step() {
+  printf '\n==> %s\n' "$1"
+}
+
+if [[ ! -x "$bun_binary" ]] || [[ "$("$bun_binary" --version)" != "$required_bun_version" ]]; then
+  step "Installing Bun $required_bun_version"
+  curl -fsSL https://bun.sh/install | bash -s "bun-v$required_bun_version"
+fi
+
+if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile" 2>/dev/null; then
+  step "Configuring Bun for login shells"
+  cat >>"$HOME/.bash_profile" <<'EOF'
+
+# cmdz Bun toolchain
+case "$PATH" in
+  "$HOME/.bun/bin" | "$HOME/.bun/bin":*) ;;
+  *) export PATH="$HOME/.bun/bin:$PATH" ;;
+esac
+EOF
+fi
+
+step "Installing locked dependencies"
+"$bun_binary" install --frozen-lockfile
+
+step "Setup complete"
