@@ -53,6 +53,18 @@ function updatePane(
   }
 }
 
+function completePane(
+  snapshot: WorkspaceSnapshot,
+  name: string,
+  run: number,
+  status: Extract<PaneStatus, 'stopped' | 'succeeded' | 'failed'>,
+) {
+  const pane = snapshot.panes.find((candidate) => candidate.name === name)
+  if (!pane || pane.run !== run) return snapshot
+  const next = updatePane(snapshot, name, () => ({ ...pane, status }))
+  return snapshot.selected === name ? { ...next, input: false } : next
+}
+
 function transition(snapshot: WorkspaceSnapshot, command: WorkspaceCommand): WorkspaceSnapshot {
   switch (command.type) {
     case 'select':
@@ -81,19 +93,28 @@ function transition(snapshot: WorkspaceSnapshot, command: WorkspaceCommand): Wor
           : pane,
       )
     case 'stopped':
-      return updatePane(snapshot, command.name, (pane) =>
-        pane.run === command.run ? { ...pane, status: 'stopped' } : pane,
+      return completePane(snapshot, command.name, command.run, 'stopped')
+    case 'exit': {
+      const pane = snapshot.panes.find((candidate) => candidate.name === command.name)
+      if (!pane || pane.run !== command.run) return snapshot
+      if (pane.status === 'stopping')
+        return completePane(snapshot, command.name, command.run, 'stopped')
+      if (pane.status !== 'starting' && pane.status !== 'running') return snapshot
+      return completePane(
+        snapshot,
+        command.name,
+        command.run,
+        command.code === 0 ? 'succeeded' : 'failed',
       )
-    case 'exit':
-      return updatePane(snapshot, command.name, (pane) =>
-        pane.run === command.run
-          ? { ...pane, status: command.code === 0 ? 'succeeded' : 'failed' }
-          : pane,
-      )
-    case 'fail':
-      return updatePane(snapshot, command.name, (pane) =>
-        pane.run === command.run ? { ...pane, status: 'failed' } : pane,
-      )
+    }
+    case 'fail': {
+      const pane = snapshot.panes.find((candidate) => candidate.name === command.name)
+      return !pane ||
+        pane.run !== command.run ||
+        (pane.status !== 'starting' && pane.status !== 'running')
+        ? snapshot
+        : completePane(snapshot, command.name, command.run, 'failed')
+    }
     case 'input':
       return { ...snapshot, input: command.value }
     case 'sidebar':
@@ -121,8 +142,6 @@ export const makeWorkspaceCore = Effect.fn('workspace.core.make')(function* (
     snapshots: SubscriptionRef.changes(state),
     snapshot: SubscriptionRef.get(state),
     dispatch: (command) =>
-      SubscriptionRef.getAndUpdate(state, (snapshot) => transition(snapshot, command)).pipe(
-        Effect.flatMap(() => SubscriptionRef.get(state)),
-      ),
+      SubscriptionRef.updateAndGet(state, (snapshot) => transition(snapshot, command)),
   }
 })

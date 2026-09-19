@@ -36,4 +36,20 @@ test('publishes immutable lifecycle snapshots and ignores stale process events',
     'succeeded',
   ])
   expect(states[0]).not.toBe(states[1])
+}, 1000)
+
+test('keeps a manual stop terminal even when its process later exits', async () => {
+  const snapshot = await Effect.runPromise(
+    Effect.gen(function* () {
+      const core = yield* makeWorkspaceCore(definitions)
+      yield* core.dispatch({ type: 'start', name: 'First' })
+      yield* core.dispatch({ type: 'running', name: 'First', run: 1 })
+      yield* core.dispatch({ type: 'input', value: true })
+      yield* core.dispatch({ type: 'stop', name: 'First' })
+      return yield* core.dispatch({ type: 'exit', name: 'First', run: 1, code: 0 })
+    }),
+  )
+
+  expect(snapshot.panes[0]?.status).toBe('stopped')
+  expect(snapshot.input).toBe(false)
 })
