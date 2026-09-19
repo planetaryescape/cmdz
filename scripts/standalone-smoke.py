@@ -74,7 +74,9 @@ def trial(binary, project, mode):
         text(b"ECHO:resize")
         os.write(master, b"\x1ah")
         text(b"RESIZED:32 110")
-        os.write(master, b"\rwide\r")
+        os.write(master, b"\r")
+        text(b"INPUT")
+        os.write(master, b"wide\r")
         text(b"ECHO:wide")
         if mode == "quit":
             os.write(master, b"\x1aq")
