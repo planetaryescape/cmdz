@@ -4,6 +4,11 @@
 | ---------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
 | SST Mosaic                   | [sst/sst](https://github.com/sst/sst)                                                      | Process panes, autostart, focus controls, and terminal lifecycle.                     |
 | Alchemy                      | [alchemy-run/alchemy](https://github.com/alchemy-run/alchemy)                              | Factory-style TypeScript declarations for the config API.                             |
+| Effect                       | [Effect-TS/effect](https://github.com/Effect-TS/effect)                                    | Runtime and scoped-resource implementation reference.                                 |
+| Foldkit                      | [foldkit/foldkit](https://github.com/foldkit/foldkit)                                      | Canonical design reference; inspect when its architecture is applicable.              |
+| OpenCode                     | [anomalyco/opencode](https://github.com/anomalyco/opencode)                                | Canonical design reference; inspect when its architecture is applicable.              |
+| Executor                     | [UsefulSoftwareCo/executor](https://github.com/UsefulSoftwareCo/executor)                  | Canonical process-execution design reference.                                         |
+| Accountability               | [mikearnaldi/accountability](https://github.com/mikearnaldi/accountability)                | Canonical Effect-oriented design reference.                                           |
 | mprocs                       | [pvolok/mprocs](https://github.com/pvolok/mprocs)                                          | Closest product reference: multiple commands with interactive terminal panes.         |
 | Turborepo TUI                | [vercel/turborepo](https://github.com/vercel/turborepo/tree/main/crates/turborepo-ui)      | Task navigation, status presentation, and runner-to-UI events.                        |
 | Process Compose              | [F1bonacc1/process-compose](https://github.com/F1bonacc1/process-compose)                  | Local process supervision, lifecycle controls, and a TUI; broader than our MVP.       |
