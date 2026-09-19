@@ -24,18 +24,21 @@ class FakeWorkspace {
     return Effect.gen(function* () {
       const starting = yield* core.dispatch({ type: 'start', name })
       const pane = starting.panes.find((candidate) => candidate.name === name)
-      if (!pane) return starting
-      return yield* core.dispatch({ type: 'running', name, run: pane.run })
+      if (!pane) throw new Error(`Unknown pane: ${name}`)
+      return {
+        snapshot: yield* core.dispatch({ type: 'running', name, run: pane.run }),
+        run: pane.run,
+      }
     })
   }
 
-  exit(name: string, code: number) {
+  exit(name: string, run: number, code: number) {
     const { core } = this
     return Effect.gen(function* () {
       const snapshot = yield* core.snapshot
       const pane = snapshot.panes.find((candidate) => candidate.name === name)
-      if (!pane) return snapshot
-      return yield* core.dispatch({ type: 'exit', name, run: pane.run, code })
+      if (!pane) throw new Error(`Unknown pane: ${name}`)
+      return yield* core.dispatch({ type: 'exit', name, run, code })
     })
   }
 
@@ -57,14 +60,14 @@ test('drives a headless command lifecycle without OpenTUI or a child process', a
       ])
       const running = yield* workspace.start('Web')
       workspace.write('Web', new TextEncoder().encode('ready'))
-      const finished = yield* workspace.exit('Web', 0)
-      yield* workspace.start('Web')
-      const failed = yield* workspace.exit('Web', 1)
+      const finished = yield* workspace.exit('Web', running.run, 0)
+      const restarted = yield* workspace.start('Web')
+      const failed = yield* workspace.exit('Web', restarted.run, 1)
       return { running, finished, failed, output: workspace.output.get('Web') }
     }),
   )
 
-  expect(pane(result.running, 'Web')?.status).toBe('running')
+  expect(pane(result.running.snapshot, 'Web')?.status).toBe('running')
   expect(pane(result.finished, 'Web')?.status).toBe('succeeded')
   expect(pane(result.failed, 'Web')?.status).toBe('failed')
   expect(new TextDecoder().decode(result.output?.[0])).toBe('ready')
