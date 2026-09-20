@@ -1,8 +1,8 @@
-import { Effect } from 'effect'
+import { Effect, Layer, Result } from 'effect'
 
 import {
   ProcessCleanupError,
-  type ProcessDriver,
+  ProcessDriver,
   ProcessIoError,
   type ProcessRun,
   ProcessRuntimeError,
@@ -75,8 +75,12 @@ function startPty(
         if (cleaned) return Promise.resolve()
         if (cleanupPromise) return cleanupPromise
         cleanupPromise = (async () => {
-          attach(undefined)
           try {
+            try {
+              attach(undefined)
+            } catch {
+              // The process group must be released even if the terminal adapter has already failed.
+            }
             signalGroup(child.pid, 'SIGTERM')
             await raceTimeout(child.exited, 3000, () => undefined)
             signalGroup(child.pid, 'SIGKILL')
@@ -106,7 +110,16 @@ function startPty(
       yield* Effect.result(cleanup)
       return yield* Effect.fail(new ProcessStartError({ operation: 'attach' }))
     }
-    attach(child.terminal)
+    const attached = yield* Effect.result(
+      Effect.try({
+        try: () => attach(child.terminal),
+        catch: () => new ProcessStartError({ operation: 'attach' }),
+      }),
+    )
+    if (Result.isFailure(attached)) {
+      yield* Effect.result(cleanup)
+      return yield* Effect.fail(attached.failure)
+    }
     const run: ProcessRun = {
       write: (bytes) =>
         Effect.try({
@@ -146,12 +159,14 @@ function startPty(
       Effect.annotateLogs({ 'command.name': request.name }),
     )
     return run
-  })
+  }).pipe(Effect.uninterruptible)
 }
 
-export const ptyProcessDriver: ProcessDriver = {
+export const ptyProcessDriver = ProcessDriver.of({
   start: (request) => startPty(request, () => {}),
-}
+})
+
+export const ptyProcessDriverLayer = Layer.succeed(ProcessDriver, ptyProcessDriver)
 
 export const runPty = Effect.fn('process.run.compatibility')(function* (
   command: readonly [string, ...string[]],

@@ -3,7 +3,7 @@ import { expect, test } from 'bun:test'
 import { Effect, Fiber, Stream } from 'effect'
 
 import type { ProcessDefinition } from './config'
-import { RecordingProcessDriver } from './testing/fake-process-driver'
+import { makeRecordingProcessDriver } from './testing/fake-process-driver'
 import {
   createWorkspaceController,
   type PaneSnapshot,
@@ -37,8 +37,10 @@ function runOf(snapshot: WorkspaceSnapshot, name: string) {
 test('drives typed lifecycle, opaque output, input, and resize through one controller', async () => {
   const result = await Effect.runPromise(
     Effect.gen(function* () {
-      const driver = new RecordingProcessDriver()
-      const controller = yield* createWorkspaceController([definition('Web')], driver)
+      const driver = makeRecordingProcessDriver()
+      const controller = yield* createWorkspaceController([definition('Web')]).pipe(
+        Effect.provide(driver.layer),
+      )
       const events = yield* controller.events.pipe(
         Stream.take(2),
         Stream.runCollect,
@@ -88,11 +90,11 @@ test('drives typed lifecycle, opaque output, input, and resize through one contr
 test('routes terminal responses to a background run but rejects background user input', async () => {
   const result = await Effect.runPromise(
     Effect.gen(function* () {
-      const driver = new RecordingProcessDriver()
-      const controller = yield* createWorkspaceController(
-        [definition('Web', true), definition('Worker', true)],
-        driver,
-      )
+      const driver = makeRecordingProcessDriver()
+      const controller = yield* createWorkspaceController([
+        definition('Web', true),
+        definition('Worker', true),
+      ]).pipe(Effect.provide(driver.layer))
       yield* controller.initialize({ Web: size, Worker: size })
       yield* controller.dispatch({ type: 'select', name: 'Worker' })
       yield* controller.dispatch({ type: 'enterInput', name: 'Worker' })
@@ -102,6 +104,7 @@ test('routes terminal responses to a background run but rejects background user 
         name: 'Web',
         source: 'terminalResponse',
         bytes: response,
+        run: 1,
       })
       const rejected = yield* Effect.exit(
         controller.dispatch({ type: 'write', name: 'Web', source: 'user', bytes: response }),
@@ -117,8 +120,10 @@ test('routes terminal responses to a background run but rejects background user 
 test('waits for cleanup before restart and rejects output from the previous run', async () => {
   const result = await Effect.runPromise(
     Effect.gen(function* () {
-      const driver = new RecordingProcessDriver()
-      const controller = yield* createWorkspaceController([definition('Web')], driver)
+      const driver = makeRecordingProcessDriver()
+      const controller = yield* createWorkspaceController([definition('Web')]).pipe(
+        Effect.provide(driver.layer),
+      )
       const events = yield* controller.events.pipe(
         Stream.take(3),
         Stream.runCollect,
@@ -131,6 +136,15 @@ test('waits for cleanup before restart and rejects output from the previous run'
       const restarted = yield* controller.dispatch({ type: 'restart', name: 'Web', size })
       const second = driver.process('Web', runOf(restarted, 'Web'))
       first.emit(new TextEncoder().encode('stale'))
+      const staleResponse = yield* Effect.exit(
+        controller.dispatch({
+          type: 'write',
+          name: 'Web',
+          source: 'terminalResponse',
+          run: first.run,
+          bytes: new TextEncoder().encode('stale-response'),
+        }),
+      )
       const fresh = new TextEncoder().encode('fresh')
       second.emit(fresh)
       return {
@@ -139,6 +153,7 @@ test('waits for cleanup before restart and rejects output from the previous run'
         fresh,
         second,
         snapshot: yield* controller.snapshot,
+        staleResponse,
       }
     }).pipe(Effect.scoped),
   )
@@ -146,6 +161,8 @@ test('waits for cleanup before restart and rejects output from the previous run'
   expect(result.first.cleanupAttempts).toBe(1)
   expect(result.first.active).toBe(false)
   expect(result.second.run).toBe(result.first.run + 1)
+  expect(result.staleResponse._tag).toBe('Failure')
+  expect(result.second.input).toEqual([])
   expect(result.events.filter((event) => event.type === 'output')).toEqual([
     { type: 'output', name: 'Web', run: 2, bytes: result.fresh },
   ])
@@ -155,8 +172,10 @@ test('waits for cleanup before restart and rejects output from the previous run'
 test('rejects duplicate start without replacing the current run', async () => {
   const result = await Effect.runPromise(
     Effect.gen(function* () {
-      const driver = new RecordingProcessDriver()
-      const controller = yield* createWorkspaceController([definition('Web')], driver)
+      const driver = makeRecordingProcessDriver()
+      const controller = yield* createWorkspaceController([definition('Web')]).pipe(
+        Effect.provide(driver.layer),
+      )
       yield* controller.initialize({ Web: size })
       yield* controller.dispatch({ type: 'start', name: 'Web', size })
       const duplicate = yield* Effect.exit(
@@ -174,18 +193,15 @@ test('rejects duplicate start without replacing the current run', async () => {
 test('classifies start, runtime, nonzero exit, manual stop, and unresolved cleanup', async () => {
   const result = await Effect.runPromise(
     Effect.gen(function* () {
-      const driver = new RecordingProcessDriver()
+      const driver = makeRecordingProcessDriver()
       driver.startFailures.add('Start')
-      const controller = yield* createWorkspaceController(
-        [
-          definition('Start'),
-          definition('Runtime'),
-          definition('Exit'),
-          definition('Stop'),
-          definition('Cleanup'),
-        ],
-        driver,
-      )
+      const controller = yield* createWorkspaceController([
+        definition('Start'),
+        definition('Runtime'),
+        definition('Exit'),
+        definition('Stop'),
+        definition('Cleanup'),
+      ]).pipe(Effect.provide(driver.layer))
       yield* controller.initialize({
         Start: size,
         Runtime: size,
@@ -235,11 +251,12 @@ test('classifies start, runtime, nonzero exit, manual stop, and unresolved clean
 test('initializes autostart once, keeps optional panes idle, and resizes every active pane', async () => {
   const result = await Effect.runPromise(
     Effect.gen(function* () {
-      const driver = new RecordingProcessDriver()
-      const controller = yield* createWorkspaceController(
-        [definition('Web', true), definition('Worker', true), definition('Optional')],
-        driver,
-      )
+      const driver = makeRecordingProcessDriver()
+      const controller = yield* createWorkspaceController([
+        definition('Web', true),
+        definition('Worker', true),
+        definition('Optional'),
+      ]).pipe(Effect.provide(driver.layer))
       const initialized = yield* controller.initialize({ Web: size, Worker: size, Optional: size })
       yield* controller.dispatch({
         type: 'resize',
@@ -268,11 +285,12 @@ test('initializes autostart once, keeps optional panes idle, and resizes every a
 test('retries failed pane cleanup during shutdown and still cleans every peer', async () => {
   const result = await Effect.runPromise(
     Effect.gen(function* () {
-      const driver = new RecordingProcessDriver()
-      const controller = yield* createWorkspaceController(
-        [definition('Web', true), definition('Worker', true), definition('Optional')],
-        driver,
-      )
+      const driver = makeRecordingProcessDriver()
+      const controller = yield* createWorkspaceController([
+        definition('Web', true),
+        definition('Worker', true),
+        definition('Optional'),
+      ]).pipe(Effect.provide(driver.layer))
       yield* controller.initialize({ Web: size, Worker: size, Optional: size })
       driver.failCleanup('Web', 1)
       const stopped = yield* controller.dispatch({ type: 'stop', name: 'Web' })
@@ -286,17 +304,18 @@ test('retries failed pane cleanup during shutdown and still cleans every peer', 
   expect(result.driver.process('Worker', 1).cleanupAttempts).toBe(1)
   expect(result.driver.runs.has('Optional:1')).toBe(false)
   expect(result.snapshot.shuttingDown).toBe(true)
+  expect(pane(result.snapshot, 'Web').lifecycle._tag).toBe('Stopped')
   expect(Array.from(result.driver.runs.values()).every((process) => !process.active)).toBe(true)
 })
 
 test('aggregates unresolved cleanup after attempting every pane and memoizes shutdown', async () => {
   const result = await Effect.runPromise(
     Effect.gen(function* () {
-      const driver = new RecordingProcessDriver()
-      const controller = yield* createWorkspaceController(
-        [definition('Web', true), definition('Worker', true)],
-        driver,
-      )
+      const driver = makeRecordingProcessDriver()
+      const controller = yield* createWorkspaceController([
+        definition('Web', true),
+        definition('Worker', true),
+      ]).pipe(Effect.provide(driver.layer))
       yield* controller.initialize({ Web: size, Worker: size })
       driver.failCleanup('Web', 1, 3)
       yield* driver.process('Web', 1).exit(23)

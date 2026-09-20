@@ -58,9 +58,17 @@ def trial(binary, project, mode):
     def text(value):
         wait_for(lambda: value.replace(b" ", b"") in plain_output().replace(b" ", b""), value)
 
+    def child_pid():
+        try:
+            return int((project / "app" / "child.pid").read_text().strip())
+        except ValueError:
+            return None
+
     try:
         text(b"READY:standalone")
-        owned_pid = int((project / "app" / "child.pid").read_text())
+        wait_for(lambda: child_pid() is not None, "child process")
+        owned_pid = child_pid()
+        assert owned_pid is not None
         owned_group = os.getpgid(owned_pid)
         os.write(master, b"\r")
         text(b"INPUT")
@@ -96,10 +104,11 @@ def trial(binary, project, mode):
             os.write(master, b"r")
             text(b"running")
             wait_for(
-                lambda: int((project / "app" / "child.pid").read_text()) != previous_pid,
+                lambda: (pid := child_pid()) is not None and pid != previous_pid,
                 "new process",
             )
-            owned_pid = int((project / "app" / "child.pid").read_text())
+            owned_pid = child_pid()
+            assert owned_pid is not None
             owned_group = os.getpgid(owned_pid)
             assert owned_pid != previous_pid, "Restart reused the previous process"
             os.write(master, b"\r")

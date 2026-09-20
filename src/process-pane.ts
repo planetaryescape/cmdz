@@ -3,7 +3,12 @@ import { EmbeddedTerminalRenderable, type CliRenderer } from '@opentui/core'
 import type { ProcessDefinition } from './config'
 
 interface ProcessPaneHandlers {
-  readonly onData: (name: string, bytes: Uint8Array, source: 'input' | 'response') => void
+  readonly onData: (
+    name: string,
+    run: number,
+    bytes: Uint8Array,
+    source: 'input' | 'response',
+  ) => void
   readonly onResize: (name: string, columns: number, rows: number) => void
 }
 
@@ -32,6 +37,7 @@ export class ProcessPane {
   }
 
   private makeTerminal() {
+    const run = this.run
     return new EmbeddedTerminalRenderable(this.renderer, {
       id: `terminal-${this.index}-${this.run}`,
       position: 'absolute',
@@ -41,7 +47,7 @@ export class ProcessPane {
       height: '100%',
       maxScrollback: 10000,
       selectable: false,
-      onData: (bytes, source) => this.handlers.onData(this.definition.name, bytes, source),
+      onData: (bytes, source) => this.handlers.onData(this.definition.name, run, bytes, source),
       onTerminalResize: (columns, rows) =>
         this.handlers.onResize(this.definition.name, Math.max(1, columns), Math.max(1, rows)),
     })

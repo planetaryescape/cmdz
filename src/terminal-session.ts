@@ -3,7 +3,7 @@ import { Cause, Effect, Exit, Schema } from 'effect'
 
 import type { ProcessDefinition } from './config'
 import { renderProcessWorkspace } from './process-workspace'
-import { ptyProcessDriver } from './pty-process'
+import { ptyProcessDriverLayer } from './pty-process'
 import { createWorkspaceController } from './workspace-core'
 
 class TerminalSessionError extends Schema.TaggedError<TerminalSessionError>()(
@@ -38,7 +38,9 @@ export const terminalSession = (definitions: readonly ProcessDefinition[]) =>
     )
 
     yield* Effect.logInfo('Terminal session ready')
-    const controller = yield* createWorkspaceController(definitions, ptyProcessDriver)
+    const controller = yield* createWorkspaceController(definitions).pipe(
+      Effect.provide(ptyProcessDriverLayer),
+    )
     yield* renderProcessWorkspace(renderer, definitions, controller)
   }).pipe(
     Effect.scoped,

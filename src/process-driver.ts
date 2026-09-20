@@ -1,4 +1,4 @@
-import { Data, type Effect } from 'effect'
+import { Context, Data, type Effect } from 'effect'
 
 export interface TerminalSize {
   readonly columns: number
@@ -39,6 +39,10 @@ export interface ProcessRun {
   readonly cleanup: Effect.Effect<void, ProcessCleanupError>
 }
 
-export interface ProcessDriver {
+export interface ProcessDriverService {
   readonly start: (request: ProcessStartRequest) => Effect.Effect<ProcessRun, ProcessStartError>
 }
+
+export class ProcessDriver extends Context.Service<ProcessDriver, ProcessDriverService>()(
+  '@cmdz/ProcessDriver',
+) {}

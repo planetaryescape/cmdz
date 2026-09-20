@@ -2,9 +2,9 @@ import { BoxRenderable, TextRenderable, type CliRenderer, type KeyEvent } from '
 import { Effect, Queue, Stream } from 'effect'
 
 import type { ProcessDefinition } from './config'
-import type { ProcessDriver, TerminalSize } from './process-driver'
+import type { TerminalSize } from './process-driver'
 import { ProcessPane } from './process-pane'
-import { ptyProcessDriver } from './pty-process'
+import { ptyProcessDriverLayer } from './pty-process'
 import { createShortcutHelp } from './shortcut-help'
 import {
   createWorkspaceController,
@@ -50,12 +50,13 @@ export const renderProcessWorkspace = Effect.fn('process.workspace')(function* (
   const panes = definitions.map(
     (definition, index) =>
       new ProcessPane(definition, renderer, index, {
-        onData: (name, bytes, source) =>
+        onData: (name, run, bytes, source) =>
           offer({
             type: 'write',
             name,
             source: source === 'response' ? 'terminalResponse' : 'user',
             bytes,
+            run: source === 'response' ? run : undefined,
           }),
         onResize: (name, columns, rows) => offer({ type: 'resize', name, size: { columns, rows } }),
       }),
@@ -63,6 +64,8 @@ export const renderProcessWorkspace = Effect.fn('process.workspace')(function* (
   const panesByName = new Map(panes.map((pane) => [pane.definition.name, pane]))
   for (const pane of panes) body.add(pane.terminal)
   let snapshot = yield* controller.snapshot
+  let pendingSelected = snapshot.selected
+  let pendingSidebarVisible = snapshot.sidebarVisible
 
   const selectedPane = () => panesByName.get(snapshot.selected)
   const selectedSnapshot = () => snapshot.panes.find((pane) => pane.name === snapshot.selected)
@@ -128,7 +131,10 @@ export const renderProcessWorkspace = Effect.fn('process.workspace')(function* (
   const applySnapshot = (next: WorkspaceSnapshot) =>
     Effect.sync(() => {
       snapshot = next
-      if (snapshot.mode === 'navigation') selectedPane()?.terminal.blur()
+      pendingSelected = snapshot.selected
+      pendingSidebarVisible = snapshot.sidebarVisible
+      if (snapshot.mode === 'navigation' && selectedPane()?.terminal.focused)
+        selectedPane()?.terminal.blur()
       draw()
     })
   const applyEvent = (event: WorkspaceEvent) =>
@@ -148,8 +154,8 @@ export const renderProcessWorkspace = Effect.fn('process.workspace')(function* (
   yield* Effect.yieldNow
 
   const onKey = (key: KeyEvent) => {
-    const selected = selectedPane()
-    const state = selectedSnapshot()
+    const selected = panesByName.get(pendingSelected)
+    const state = snapshot.panes.find((pane) => pane.name === pendingSelected)
     if (!selected || !state) return
     if (help.visible) {
       if (key.name === '?' || key.name === 'escape') help.visible = false
@@ -172,11 +178,15 @@ export const renderProcessWorkspace = Effect.fn('process.workspace')(function* (
       const order = sortedPanes()
       const delta = key.name === 'j' || key.name === 'down' ? 1 : -1
       const next = order[order.indexOf(selected) + delta]
-      if (next) offer({ type: 'select', name: next.definition.name })
+      if (next) {
+        pendingSelected = next.definition.name
+        offer({ type: 'select', name: next.definition.name })
+      }
     } else if (key.name === '?') help.visible = true
-    else if (key.name === 'h')
-      offer({ type: 'setSidebarVisible', visible: !snapshot.sidebarVisible })
-    else if (key.name === 'x') offer({ type: 'stop', name: selected.definition.name })
+    else if (key.name === 'h') {
+      pendingSidebarVisible = !pendingSidebarVisible
+      offer({ type: 'setSidebarVisible', visible: pendingSidebarVisible })
+    } else if (key.name === 'x') offer({ type: 'stop', name: selected.definition.name })
     else if (key.name === 'r')
       offer({ type: 'restart', name: selected.definition.name, size: selected.size() })
     else if (key.name === 'q' || (key.ctrl && key.name === 'c'))
@@ -224,9 +234,8 @@ export const renderProcessWorkspace = Effect.fn('process.workspace')(function* (
 export const processWorkspace = (
   renderer: CliRenderer,
   definitions: readonly ProcessDefinition[],
-  driver: ProcessDriver = ptyProcessDriver,
 ) =>
   Effect.gen(function* () {
-    const controller = yield* createWorkspaceController(definitions, driver)
+    const controller = yield* createWorkspaceController(definitions)
     yield* renderProcessWorkspace(renderer, definitions, controller)
-  }).pipe(Effect.scoped)
+  }).pipe(Effect.scoped, Effect.provide(ptyProcessDriverLayer))

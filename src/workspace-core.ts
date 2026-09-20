@@ -2,31 +2,37 @@ import { Data, Effect, Queue, Result, Semaphore, Stream, SubscriptionRef, type S
 
 import type { ProcessDefinition } from './config'
 import {
-  type ProcessDriver,
+  ProcessDriver,
   type ProcessIoError,
   type ProcessRun,
   type TerminalSize,
 } from './process-driver'
 
-export type PaneFailure =
-  | { readonly _tag: 'StartFailed'; readonly operation: string }
-  | { readonly _tag: 'RuntimeFailed'; readonly operation: string }
-  | { readonly _tag: 'Exited'; readonly exitCode: number }
-  | {
-      readonly _tag: 'CleanupFailed'
-      readonly operation: string
-      readonly processGroupId?: number | undefined
-      readonly priorExitCode?: number | undefined
-    }
+export type PaneFailure = Data.TaggedEnum<{
+  readonly StartFailed: { readonly operation: string }
+  readonly RuntimeFailed: { readonly operation: string }
+  readonly Exited: { readonly exitCode: number }
+  readonly CleanupFailed: {
+    readonly operation: string
+    readonly processGroupId?: number | undefined
+    readonly priorExitCode?: number | undefined
+    readonly stopRequested?: boolean | undefined
+  }
+}>
 
-export type PaneLifecycle =
-  | { readonly _tag: 'Idle'; readonly lastRun: number }
-  | { readonly _tag: 'Starting'; readonly run: number }
-  | { readonly _tag: 'Running'; readonly run: number }
-  | { readonly _tag: 'Stopping'; readonly run: number }
-  | { readonly _tag: 'Stopped'; readonly run: number }
-  | { readonly _tag: 'Succeeded'; readonly run: number; readonly exitCode: 0 }
-  | { readonly _tag: 'Failed'; readonly run: number; readonly failure: PaneFailure }
+export const PaneFailure = Data.taggedEnum<PaneFailure>()
+
+export type PaneLifecycle = Data.TaggedEnum<{
+  readonly Idle: { readonly lastRun: number }
+  readonly Starting: { readonly run: number }
+  readonly Running: { readonly run: number }
+  readonly Stopping: { readonly run: number }
+  readonly Stopped: { readonly run: number }
+  readonly Succeeded: { readonly run: number; readonly exitCode: 0 }
+  readonly Failed: { readonly run: number; readonly failure: PaneFailure }
+}>
+
+export const PaneLifecycle = Data.taggedEnum<PaneLifecycle>()
 
 export interface PaneSnapshot {
   readonly name: string
@@ -54,6 +60,7 @@ export type WorkspaceCommand =
       readonly name: string
       readonly source: 'user' | 'terminalResponse'
       readonly bytes: Uint8Array
+      readonly run?: number | undefined
     }
   | { readonly type: 'resize'; readonly name: string; readonly size: TerminalSize }
   | { readonly type: 'setSidebarVisible'; readonly visible: boolean }
@@ -157,8 +164,8 @@ export function renderStatus(lifecycle: PaneLifecycle) {
 
 export const createWorkspaceController = Effect.fn('workspace.controller.make')(function* (
   definitions: readonly ProcessDefinition[],
-  driver: ProcessDriver,
-): Effect.fn.Return<WorkspaceController, never, Scope.Scope> {
+): Effect.fn.Return<WorkspaceController, never, Scope.Scope | ProcessDriver> {
+  const driver = yield* ProcessDriver
   const first = definitions[0]
   if (!first) throw new Error('Workspace requires at least one command.')
   const scope = yield* Effect.scope
@@ -166,7 +173,7 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
     panes: definitions.map((definition) => ({
       name: definition.name,
       title: definition.title,
-      lifecycle: { _tag: 'Idle', lastRun: 0 },
+      lifecycle: PaneLifecycle.Idle({ lastRun: 0 }),
     })),
     selected: first.name,
     mode: 'navigation',
@@ -215,35 +222,41 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
           const pane = findPane(snapshot, name)
           if (!pane || paneRun(pane.lifecycle) !== run) return
           if (Result.isFailure(cleanup)) {
-            yield* setPaneLifecycle(name, run, {
-              _tag: 'Failed',
+            yield* setPaneLifecycle(
+              name,
               run,
-              failure: {
-                _tag: 'CleanupFailed',
-                operation: cleanup.failure.operation,
-                processGroupId: cleanup.failure.processGroupId,
-                priorExitCode: exitCode,
-              },
-            })
+              PaneLifecycle.Failed({
+                run,
+                failure: PaneFailure.CleanupFailed({
+                  operation: cleanup.failure.operation,
+                  processGroupId: cleanup.failure.processGroupId,
+                  priorExitCode: exitCode,
+                  stopRequested: pane.lifecycle._tag === 'Stopping',
+                }),
+              }),
+            )
             return
           }
           activeRuns.delete(name)
           if (pane.lifecycle._tag === 'Stopping') {
-            yield* setPaneLifecycle(name, run, { _tag: 'Stopped', run })
+            yield* setPaneLifecycle(name, run, PaneLifecycle.Stopped({ run }))
           } else if (runtimeOperation) {
-            yield* setPaneLifecycle(name, run, {
-              _tag: 'Failed',
+            yield* setPaneLifecycle(
+              name,
               run,
-              failure: { _tag: 'RuntimeFailed', operation: runtimeOperation },
-            })
+              PaneLifecycle.Failed({
+                run,
+                failure: PaneFailure.RuntimeFailed({ operation: runtimeOperation }),
+              }),
+            )
           } else if (exitCode === 0) {
-            yield* setPaneLifecycle(name, run, { _tag: 'Succeeded', run, exitCode: 0 })
+            yield* setPaneLifecycle(name, run, PaneLifecycle.Succeeded({ run, exitCode: 0 }))
           } else if (exitCode !== undefined) {
-            yield* setPaneLifecycle(name, run, {
-              _tag: 'Failed',
+            yield* setPaneLifecycle(
+              name,
               run,
-              failure: { _tag: 'Exited', exitCode },
-            })
+              PaneLifecycle.Failed({ run, failure: PaneFailure.Exited({ exitCode }) }),
+            )
           }
         }),
       )
@@ -273,40 +286,49 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
       yield* SubscriptionRef.update(state, (current) =>
         updatePane(current, name, (currentPane) => ({
           ...currentPane,
-          lifecycle: { _tag: 'Starting', run },
+          lifecycle: PaneLifecycle.Starting({ run }),
         })),
       )
       yield* Queue.offer(events, { type: 'resetTerminal', name, run })
-      const started = yield* Effect.result(
-        driver.start({
-          name,
-          run,
-          command: ['/bin/sh', '-c', definition.command],
-          cwd: definition.cwd,
-          env: { ...process.env, ...definition.env },
-          size,
-          output: (bytes) => {
-            const current = SubscriptionRef.getUnsafe(state)
-            const currentPane = findPane(current, name)
-            if (
-              currentPane &&
-              paneRun(currentPane.lifecycle) === run &&
-              isActive(currentPane.lifecycle)
-            )
-              Queue.offerUnsafe(events, { type: 'output', name, run, bytes })
-          },
-        }),
+      const started = yield* Effect.uninterruptible(
+        driver
+          .start({
+            name,
+            run,
+            command: ['/bin/sh', '-c', definition.command],
+            cwd: definition.cwd,
+            env: { ...process.env, ...definition.env },
+            size,
+            output: (bytes) => {
+              const current = SubscriptionRef.getUnsafe(state)
+              const currentPane = findPane(current, name)
+              if (
+                currentPane &&
+                paneRun(currentPane.lifecycle) === run &&
+                isActive(currentPane.lifecycle)
+              )
+                Queue.offerUnsafe(events, { type: 'output', name, run, bytes })
+            },
+          })
+          .pipe(Effect.result),
       )
       if (Result.isFailure(started)) {
-        return yield* setPaneLifecycle(name, run, {
-          _tag: 'Failed',
+        return yield* setPaneLifecycle(
+          name,
           run,
-          failure: { _tag: 'StartFailed', operation: started.failure.operation },
-        })
+          PaneLifecycle.Failed({
+            run,
+            failure: PaneFailure.StartFailed({ operation: started.failure.operation }),
+          }),
+        )
       }
-      activeRuns.set(name, { run, process: started.success })
-      yield* setPaneLifecycle(name, run, { _tag: 'Running', run })
-      yield* Effect.forkIn(watchRun(name, run, started.success), scope)
+      yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          activeRuns.set(name, { run, process: started.success })
+          yield* setPaneLifecycle(name, run, PaneLifecycle.Running({ run }))
+          yield* Effect.forkIn(watchRun(name, run, started.success), scope)
+        }),
+      )
       return yield* SubscriptionRef.get(state)
     })
 
@@ -320,21 +342,24 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
       const active = activeRuns.get(name)
       if (!active || active.run !== run)
         return yield* Effect.fail(commandError('paneNotRunning', name))
-      yield* setPaneLifecycle(name, run, { _tag: 'Stopping', run })
+      yield* setPaneLifecycle(name, run, PaneLifecycle.Stopping({ run }))
       const cleanup = yield* Effect.result(active.process.cleanup)
       if (Result.isFailure(cleanup)) {
-        return yield* setPaneLifecycle(name, run, {
-          _tag: 'Failed',
+        return yield* setPaneLifecycle(
+          name,
           run,
-          failure: {
-            _tag: 'CleanupFailed',
-            operation: cleanup.failure.operation,
-            processGroupId: cleanup.failure.processGroupId,
-          },
-        })
+          PaneLifecycle.Failed({
+            run,
+            failure: PaneFailure.CleanupFailed({
+              operation: cleanup.failure.operation,
+              processGroupId: cleanup.failure.processGroupId,
+              stopRequested: true,
+            }),
+          }),
+        )
       }
       activeRuns.delete(name)
-      return yield* setPaneLifecycle(name, run, { _tag: 'Stopped', run })
+      return yield* setPaneLifecycle(name, run, PaneLifecycle.Stopped({ run }))
     })
 
   const initialize = (initialSizes: Readonly<Record<string, TerminalSize>>) =>
@@ -363,8 +388,12 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
           return yield* Effect.fail(commandError('workspaceShuttingDown', command.name))
         const pane = findPane(snapshot, command.name)
         if (!pane) return yield* Effect.fail(commandError('unknownPane', command.name))
+        if (command.type === 'resize' && pane.lifecycle._tag !== 'Running') return snapshot
         if (
           pane.lifecycle._tag !== 'Running' ||
+          (command.type === 'write' &&
+            command.source === 'terminalResponse' &&
+            command.run !== pane.lifecycle.run) ||
           (command.type === 'write' &&
             command.source === 'user' &&
             (snapshot.selected !== command.name || snapshot.mode !== 'input'))
@@ -454,6 +483,10 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
             pane?.lifecycle._tag === 'Failed' && pane.lifecycle.failure._tag === 'CleanupFailed'
               ? pane.lifecycle.failure.priorExitCode
               : undefined
+          const stopRequested =
+            pane?.lifecycle._tag === 'Failed' && pane.lifecycle.failure._tag === 'CleanupFailed'
+              ? pane.lifecycle.failure.stopRequested
+              : undefined
           failures.push({
             name,
             run: active.run,
@@ -461,19 +494,48 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
             processGroupId: cleanup.failure.processGroupId,
             priorExitCode,
           })
-          yield* setPaneLifecycle(name, active.run, {
-            _tag: 'Failed',
-            run: active.run,
-            failure: {
-              _tag: 'CleanupFailed',
-              operation: cleanup.failure.operation,
-              processGroupId: cleanup.failure.processGroupId,
-              priorExitCode,
-            },
-          })
+          yield* setPaneLifecycle(
+            name,
+            active.run,
+            PaneLifecycle.Failed({
+              run: active.run,
+              failure: PaneFailure.CleanupFailed({
+                operation: cleanup.failure.operation,
+                processGroupId: cleanup.failure.processGroupId,
+                priorExitCode,
+                stopRequested,
+              }),
+            }),
+          )
         } else {
           activeRuns.delete(name)
-          yield* setPaneLifecycle(name, active.run, { _tag: 'Stopped', run: active.run })
+          const snapshot = yield* SubscriptionRef.get(state)
+          const pane = findPane(snapshot, name)
+          const failedCleanup =
+            pane?.lifecycle._tag === 'Failed' && pane.lifecycle.failure._tag === 'CleanupFailed'
+              ? pane.lifecycle.failure
+              : undefined
+          if (failedCleanup?.stopRequested)
+            yield* setPaneLifecycle(name, active.run, PaneLifecycle.Stopped({ run: active.run }))
+          else if (failedCleanup?.priorExitCode === 0)
+            yield* setPaneLifecycle(
+              name,
+              active.run,
+              PaneLifecycle.Succeeded({
+                run: active.run,
+                exitCode: 0,
+              }),
+            )
+          else if (failedCleanup?.priorExitCode !== undefined)
+            yield* setPaneLifecycle(
+              name,
+              active.run,
+              PaneLifecycle.Failed({
+                run: active.run,
+                failure: PaneFailure.Exited({ exitCode: failedCleanup.priorExitCode }),
+              }),
+            )
+          else yield* setPaneLifecycle(name, active.run, PaneLifecycle.Stopped({ run: active.run }))
         }
       }
       if (failures.length > 0) return yield* Effect.fail(new WorkspaceShutdownError({ failures }))
