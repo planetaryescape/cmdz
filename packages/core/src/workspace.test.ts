@@ -35,17 +35,6 @@ function runOf(snapshot: WorkspaceSnapshot, name: string) {
   return lifecycle._tag === 'Ready' ? lifecycle.lastRun : lifecycle.run
 }
 
-const awaitLifecycle = (
-  controller: { readonly snapshots: Stream.Stream<WorkspaceSnapshot> },
-  name: string,
-  tag: PaneSnapshot['lifecycle']['_tag'],
-) =>
-  controller.snapshots.pipe(
-    Stream.filter((snapshot) => pane(snapshot, name).lifecycle._tag === tag),
-    Stream.take(1),
-    Stream.runDrain,
-  )
-
 const awaitOutcome = (
   controller: { readonly snapshots: Stream.Stream<WorkspaceSnapshot> },
   name: string,
