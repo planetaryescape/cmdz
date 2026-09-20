@@ -8,6 +8,7 @@ import {
   ProcessRuntimeError,
   ProcessStartError,
   type ProcessStartRequest,
+  normalizeTerminalSize,
 } from './process-driver'
 
 interface TerminalPort {
@@ -39,8 +40,8 @@ function startPty(
           cwd: request.cwd,
           env: { ...request.env, TERM: 'xterm-256color' },
           terminal: {
-            cols: Math.max(1, request.size.columns),
-            rows: Math.max(1, request.size.rows),
+            cols: request.size.columns,
+            rows: request.size.rows,
             data: (_terminal, bytes) => request.output(bytes),
             exit: () => drained.resolve(),
           },
@@ -123,7 +124,8 @@ function startPty(
       resize: (size) =>
         Effect.try({
           try: () => {
-            child.terminal?.resize(Math.max(1, size.columns), Math.max(1, size.rows))
+            const normalized = normalizeTerminalSize(size.columns, size.rows)
+            child.terminal?.resize(normalized.columns, normalized.rows)
           },
           catch: () => new ProcessIoError({ operation: 'resize' }),
         }),

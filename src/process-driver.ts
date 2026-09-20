@@ -1,9 +1,17 @@
-import { Context, Data, type Effect } from 'effect'
+import { Context, Data, Schema, type Effect } from 'effect'
 
-export interface TerminalSize {
-  readonly columns: number
-  readonly rows: number
-}
+export const TerminalSize = Schema.Struct({
+  columns: Schema.Int.check(Schema.isGreaterThan(0)),
+  rows: Schema.Int.check(Schema.isGreaterThan(0)),
+})
+
+export type TerminalSize = typeof TerminalSize.Type
+
+export const normalizeTerminalSize = (columns: number, rows: number): TerminalSize =>
+  Schema.decodeUnknownSync(TerminalSize)({
+    columns: Math.max(1, columns),
+    rows: Math.max(1, rows),
+  })
 
 export class ProcessStartError extends Data.TaggedError('ProcessStartError')<{
   readonly operation: string

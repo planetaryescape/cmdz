@@ -2,7 +2,7 @@ import { BoxRenderable, TextRenderable, type CliRenderer, type KeyEvent } from '
 import { Effect, Queue, Stream } from 'effect'
 
 import type { ProcessDefinition } from './config'
-import type { TerminalSize } from './process-driver'
+import { normalizeTerminalSize, type TerminalSize } from './process-driver'
 import { ProcessPane } from './process-pane'
 import { ptyProcessDriverLayer } from './pty-process'
 import { createShortcutHelp } from './shortcut-help'
@@ -58,7 +58,8 @@ export const renderProcessWorkspace = Effect.fn('process.workspace')(function* (
             bytes,
             run: source === 'response' ? run : undefined,
           }),
-        onResize: (name, columns, rows) => offer({ type: 'resize', name, size: { columns, rows } }),
+        onResize: (name, columns, rows) =>
+          offer({ type: 'resize', name, size: normalizeTerminalSize(columns, rows) }),
       }),
   )
   const panesByName = new Map(panes.map((pane) => [pane.definition.name, pane]))

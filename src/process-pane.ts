@@ -1,6 +1,7 @@
 import { EmbeddedTerminalRenderable, type CliRenderer } from '@opentui/core'
 
 import type { ProcessDefinition } from './config'
+import { normalizeTerminalSize } from './process-driver'
 
 interface ProcessPaneHandlers {
   readonly onData: (
@@ -33,7 +34,7 @@ export class ProcessPane {
 
   size() {
     const screen = this.terminal.screen()
-    return { columns: Math.max(1, screen.columns), rows: Math.max(1, screen.rows) }
+    return normalizeTerminalSize(screen.columns, screen.rows)
   }
 
   private makeTerminal() {
