@@ -2,7 +2,9 @@ import { createCliRenderer } from '@opentui/core'
 import { Cause, Effect, Exit, Schema } from 'effect'
 
 import type { ProcessDefinition } from './config'
-import { processWorkspace } from './process-workspace'
+import { renderProcessWorkspace } from './process-workspace'
+import { ptyProcessDriverLayer } from './pty-process'
+import { createWorkspaceController } from './workspace-core'
 
 class TerminalSessionError extends Schema.TaggedError<TerminalSessionError>()(
   'TerminalSessionError',
@@ -36,7 +38,10 @@ export const terminalSession = (definitions: readonly ProcessDefinition[]) =>
     )
 
     yield* Effect.logInfo('Terminal session ready')
-    yield* processWorkspace(renderer, definitions)
+    const controller = yield* createWorkspaceController(definitions).pipe(
+      Effect.provide(ptyProcessDriverLayer),
+    )
+    yield* renderProcessWorkspace(renderer, definitions, controller)
   }).pipe(
     Effect.scoped,
     Effect.onExit((exit) => {
