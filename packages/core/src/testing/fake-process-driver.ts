@@ -28,7 +28,7 @@ export interface RecordingGate {
 }
 
 interface GateControl {
-  readonly onReach: Effect.Effect<void>
+  readonly signalReached: () => Effect.Effect<void>
   readonly awaitRelease: Effect.Effect<void>
 }
 
@@ -56,10 +56,12 @@ export function makeRecordingProcessDriver(): RecordingProcessDriver {
     const key = runKey(request.name, request.run)
     const startGate = startGates.get(key)
     if (startGate) {
-      yield* startGate.onReach.pipe(
-        Effect.andThen(startGate.awaitRelease),
-        Effect.ensuring(Effect.sync(() => startGates.delete(key))),
-      )
+      yield* startGate
+        .signalReached()
+        .pipe(
+          Effect.andThen(startGate.awaitRelease),
+          Effect.ensuring(Effect.sync(() => startGates.delete(key))),
+        )
     }
     if (startFailures.has(request.name))
       return yield* Effect.fail(new ProcessStartError({ operation: 'spawn' }))
@@ -100,10 +102,12 @@ export function makeRecordingProcessDriver(): RecordingProcessDriver {
           if (cleaned) return
           const cleanupGate = cleanupGates.get(key)
           if (cleanupGate) {
-            yield* cleanupGate.onReach.pipe(
-              Effect.andThen(cleanupGate.awaitRelease),
-              Effect.ensuring(Effect.sync(() => cleanupGates.delete(key))),
-            )
+            yield* cleanupGate
+              .signalReached()
+              .pipe(
+                Effect.andThen(cleanupGate.awaitRelease),
+                Effect.ensuring(Effect.sync(() => cleanupGates.delete(key))),
+              )
           }
           recorded.cleanupAttempts++
           const failures = cleanupFailures.get(key) ?? 0
@@ -155,7 +159,7 @@ const makeGate = (gates: Map<string, GateControl>, key: string) =>
       release: Deferred.succeed(release, undefined).pipe(Effect.asVoid),
     }
     gates.set(key, {
-      onReach: Deferred.succeed(reached, undefined).pipe(Effect.asVoid),
+      signalReached: () => Deferred.succeed(reached, undefined).pipe(Effect.asVoid),
       awaitRelease: Deferred.await(release),
     })
     return gate
