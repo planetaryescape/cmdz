@@ -303,18 +303,16 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
           const pane = findPane(current, name)
           if (
             !pane ||
-            pane.lifecycle._tag === 'Ready' ||
-            pane.lifecycle._tag === 'Starting' ||
+            pane.lifecycle._tag !== 'Running' ||
             pane.lifecycle.run !== run ||
             pane.lifecycle.process !== process
           )
             return false
-          if (pane.lifecycle._tag === 'Running')
-            yield* setPaneLifecycle(
-              name,
-              run,
-              cleaningPane(run, process, target, PaneCleanup.Pending()),
-            )
+          yield* setPaneLifecycle(
+            name,
+            run,
+            cleaningPane(run, process, target, PaneCleanup.Pending()),
+          )
           return true
         }),
       )
@@ -445,8 +443,7 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
       const snapshot = yield* SubscriptionRef.get(state)
       const pane = findPane(snapshot, name)
       if (!pane) return yield* Effect.fail(commandError('unknownPane', name))
-      if (pane.lifecycle._tag === 'Ready' || isCleanupFailed(pane.lifecycle))
-        return toWorkspaceSnapshot(snapshot)
+      if (pane.lifecycle._tag === 'Ready') return toWorkspaceSnapshot(snapshot)
       if (pane.lifecycle._tag === 'Starting')
         return yield* Effect.fail(commandError('paneNotRunning', name))
       const run = pane.lifecycle.run

@@ -130,6 +130,65 @@ test('allows cleanup retry after an interrupted gated stop', async () => {
   expect(result.active).toBe(false)
 })
 
+test('allows explicit stop to retry failed cleanup', async () => {
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = makeRecordingProcessDriver()
+      const controller = yield* createWorkspaceController([definition('Web')]).pipe(
+        Effect.provide(driver.layer),
+      )
+      yield* controller.initialize({ Web: size })
+      yield* controller.dispatch({ type: 'start', name: 'Web', size })
+      driver.failCleanup('Web', 1)
+
+      const failed = yield* controller.dispatch({ type: 'stop', name: 'Web' })
+      const stopped = yield* controller.dispatch({ type: 'stop', name: 'Web' })
+      return { attempts: driver.process('Web', 1).cleanupAttempts, failed, stopped }
+    }).pipe(Effect.scoped),
+  )
+
+  expect(pane(result.failed, 'Web').lifecycle).toMatchObject({
+    _tag: 'Cleaning',
+    target: { _tag: 'Stopped' },
+    cleanup: { _tag: 'Failed' },
+  })
+  expect(pane(result.stopped, 'Web').lifecycle).toEqual({
+    _tag: 'Ready',
+    lastRun: 1,
+    outcome: { _tag: 'Stopped' },
+  })
+  expect(result.attempts).toBe(2)
+})
+
+test('does not let process exit silently retry failed stop cleanup', async () => {
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = makeRecordingProcessDriver()
+      const controller = yield* createWorkspaceController([definition('Web')]).pipe(
+        Effect.provide(driver.layer),
+      )
+      yield* controller.initialize({ Web: size })
+      yield* controller.dispatch({ type: 'start', name: 'Web', size })
+      driver.failCleanup('Web', 1)
+      yield* controller.dispatch({ type: 'stop', name: 'Web' })
+
+      yield* driver.process('Web', 1).exit(23)
+      yield* Effect.yieldNow
+      return {
+        attempts: driver.process('Web', 1).cleanupAttempts,
+        snapshot: yield* controller.snapshot,
+      }
+    }).pipe(Effect.scoped),
+  )
+
+  expect(pane(result.snapshot, 'Web').lifecycle).toMatchObject({
+    _tag: 'Cleaning',
+    target: { _tag: 'Stopped' },
+    cleanup: { _tag: 'Failed' },
+  })
+  expect(result.attempts).toBe(1)
+})
+
 test('manual stop overrides an observed exit while cleanup is pending', async () => {
   const result = await Effect.runPromise(
     Effect.gen(function* () {
@@ -382,7 +441,7 @@ test('classifies start, runtime, nonzero exit, manual stop, and unresolved clean
       yield* controller.dispatch({ type: 'start', name: 'Stop', size })
       yield* controller.dispatch({ type: 'stop', name: 'Stop' })
       yield* controller.dispatch({ type: 'start', name: 'Cleanup', size })
-      driver.failCleanup('Cleanup', 1)
+      driver.failCleanup('Cleanup', 1, 2)
       yield* controller.dispatch({ type: 'stop', name: 'Cleanup' })
       const restart = yield* Effect.exit(
         controller.dispatch({ type: 'restart', name: 'Cleanup', size }),
