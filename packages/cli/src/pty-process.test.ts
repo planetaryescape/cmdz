@@ -4,7 +4,7 @@ import { EmbeddedTerminalRenderable } from '@opentui/core'
 import { createTestRenderer } from '@opentui/core/testing'
 import { Deferred, Effect, Fiber } from 'effect'
 
-import { ptyProcessDriver, runPty } from './pty-process'
+import { makePtyProcessDriver, runPty } from './pty-process'
 
 test('renders real PTY ANSI output and preserves output after exit', async () => {
   const { renderer, renderOnce } = await createTestRenderer({ width: 80, height: 24 })
@@ -46,6 +46,32 @@ test('passes a resolved cwd and environment overlay to the shell', async () => {
   )
   expect(code).toBe(0)
   expect(output).toContain(`${cwd}|overridden|${process.env.PATH}`)
+})
+
+test('reports attachment failure only after releasing the spawned PTY', async () => {
+  let attached: Bun.Terminal | undefined
+  let detached = false
+  const error = await Effect.runPromise(
+    Effect.flip(
+      runPty(['/bin/sleep', '60'], {
+        columns: 80,
+        rows: 24,
+        output: () => {},
+        attach: (terminal) => {
+          if (!terminal) {
+            detached = true
+            return
+          }
+          attached = terminal
+          throw new Error('terminal attachment failed')
+        },
+      }),
+    ),
+  )
+
+  expect(error).toMatchObject({ _tag: 'ProcessStartError', operation: 'attach' })
+  expect(detached).toBe(true)
+  expect(attached?.closed).toBe(true)
 })
 
 test('interrupting a run terminates its process group and closes the PTY', async () => {
@@ -98,7 +124,7 @@ test('forces a TERM-ignoring process group down and deduplicates cleanup', async
     Effect.gen(function* () {
       const ready = yield* Deferred.make<void>()
       let output = ''
-      const run = yield* ptyProcessDriver.start({
+      const run = yield* makePtyProcessDriver().start({
         name: 'term-ignoring',
         run: 1,
         command: [

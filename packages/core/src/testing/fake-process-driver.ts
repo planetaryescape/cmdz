@@ -22,6 +22,16 @@ export interface RecordedProcessRun {
   active: boolean
 }
 
+export interface RecordingGate {
+  readonly reached: Effect.Effect<void>
+  readonly release: Effect.Effect<void>
+}
+
+interface GateControl {
+  readonly onReach: Effect.Effect<void>
+  readonly awaitRelease: Effect.Effect<void>
+}
+
 export interface RecordingProcessDriver {
   readonly runs: Map<string, RecordedProcessRun>
   readonly startFailures: Set<string>
@@ -30,18 +40,28 @@ export interface RecordingProcessDriver {
   readonly layer: Layer.Layer<ProcessDriver>
   readonly process: (name: string, run: number) => RecordedProcessRun
   readonly failCleanup: (name: string, run: number, attempts?: number) => void
+  readonly gateStart: (name: string, run: number) => Effect.Effect<RecordingGate>
+  readonly gateCleanup: (name: string, run: number) => Effect.Effect<RecordingGate>
 }
 
 export function makeRecordingProcessDriver(): RecordingProcessDriver {
   const runs = new Map<string, RecordedProcessRun>()
   const startFailures = new Set<string>()
   const cleanupFailures = new Map<string, number>()
+  const startGates = new Map<string, GateControl>()
+  const cleanupGates = new Map<string, GateControl>()
   const start = Effect.fn('process.driver.recording.start')(function* (
     request: ProcessStartRequest,
   ) {
+    const key = runKey(request.name, request.run)
+    const startGate = startGates.get(key)
+    if (startGate) {
+      yield* startGate.onReach
+      yield* startGate.awaitRelease
+      startGates.delete(key)
+    }
     if (startFailures.has(request.name))
       return yield* Effect.fail(new ProcessStartError({ operation: 'spawn' }))
-    const key = runKey(request.name, request.run)
     if (runs.has(key)) throw new Error(`Duplicate fake process run: ${key}`)
     const exited = yield* Deferred.make<number, ProcessRuntimeError>()
     const cleanupLock = yield* Semaphore.make(1)
@@ -75,19 +95,25 @@ export function makeRecordingProcessDriver(): RecordingProcessDriver {
         }),
       awaitExit: Deferred.await(exited),
       cleanup: cleanupLock.withPermit(
-        Effect.suspend(() => {
-          if (cleaned) return Effect.void
+        Effect.gen(function* () {
+          if (cleaned) return
+          const cleanupGate = cleanupGates.get(key)
+          if (cleanupGate) {
+            yield* cleanupGate.onReach
+            yield* cleanupGate.awaitRelease
+            cleanupGates.delete(key)
+          }
           recorded.cleanupAttempts++
           const failures = cleanupFailures.get(key) ?? 0
           if (failures > 0) {
             cleanupFailures.set(key, failures - 1)
-            return Effect.fail(
+            return yield* Effect.fail(
               new ProcessCleanupError({ operation: 'signal', processGroupId: request.run }),
             )
           }
           recorded.active = false
           cleaned = true
-          return Deferred.succeed(exited, 0).pipe(Effect.asVoid)
+          yield* Deferred.succeed(exited, 0)
         }),
       ),
     }
@@ -108,9 +134,27 @@ export function makeRecordingProcessDriver(): RecordingProcessDriver {
     failCleanup: (name, run, attempts = 1) => {
       cleanupFailures.set(runKey(name, run), attempts)
     },
+    gateStart: (name, run) => makeGate(startGates, runKey(name, run)),
+    gateCleanup: (name, run) => makeGate(cleanupGates, runKey(name, run)),
   }
 }
 
 function runKey(name: string, run: number) {
   return `${name}:${run}`
 }
+
+const makeGate = (gates: Map<string, GateControl>, key: string) =>
+  Effect.gen(function* () {
+    if (gates.has(key)) throw new Error(`Duplicate fake process gate: ${key}`)
+    const reached = yield* Deferred.make<void>()
+    const release = yield* Deferred.make<void>()
+    const gate: RecordingGate = {
+      reached: Deferred.await(reached),
+      release: Deferred.succeed(release, undefined).pipe(Effect.asVoid),
+    }
+    gates.set(key, {
+      onReach: Deferred.succeed(reached, undefined).pipe(Effect.asVoid),
+      awaitRelease: Deferred.await(release),
+    })
+    return gate
+  })
