@@ -2,6 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
 import type { CapturedFrame } from '@opentui/core'
+import { parse } from 'opentype.js'
 
 import { createWorkspace } from './workspace'
 
@@ -10,6 +11,11 @@ const cellHeight = 20
 const padding = 16
 const defaultBackground = '#0d1117'
 const defaultForeground = '#e6edf3'
+const demoDirectory = resolve(import.meta.dir, '..')
+const captureFonts = Promise.all([
+  loadFont('DejaVuSansMono.ttf'),
+  loadFont('DejaVuSansMono-Bold.ttf'),
+])
 
 /** File paths emitted for one captured TUI state. */
 export interface WorkspaceCapture {
@@ -28,16 +34,16 @@ export async function captureWorkspace(
     {
       name: 'Demo',
       title: 'Demo',
-      command: `bun run ${import.meta.dir}/../demo-command.ts`,
-      cwd: process.cwd(),
+      command: 'bun run demo-command.ts',
+      cwd: demoDirectory,
       env: {},
       autostart: true,
     },
     {
       name: 'Optional',
       title: 'Optional',
-      command: `bun run ${import.meta.dir}/../demo-command.ts`,
-      cwd: process.cwd(),
+      command: 'bun run demo-command.ts',
+      cwd: demoDirectory,
       env: {},
       autostart: false,
     },
@@ -74,7 +80,7 @@ async function saveFrame(
   frame: CapturedFrame,
 ): Promise<WorkspaceCapture> {
   const svg = resolve(outputDirectory, `${name}.svg`)
-  await writeFile(svg, renderSvg(frame), 'utf8')
+  await writeFile(svg, await renderSvg(frame), 'utf8')
 
   const magick = Bun.which('magick')
   if (!magick) return { name, svg }
@@ -88,13 +94,13 @@ async function saveFrame(
   return { name, svg, png }
 }
 
-function renderSvg(frame: CapturedFrame) {
+async function renderSvg(frame: CapturedFrame) {
   const width = frame.cols * cellWidth + padding * 2
   const height = frame.rows * cellHeight + padding * 2
+  const [regular, bold] = await captureFonts
   const elements = [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
     `<rect width="${width}" height="${height}" rx="10" fill="${defaultBackground}"/>`,
-    `<g font-family="DejaVu Sans Mono, monospace" font-size="15" xml:space="preserve">`,
   ]
 
   for (const [row, line] of frame.lines.entries()) {
@@ -108,16 +114,24 @@ function renderSvg(frame: CapturedFrame) {
         elements.push(
           `<rect x="${x}" y="${y}" width="${span.width * cellWidth}" height="${cellHeight}" fill="${background}"/>`,
         )
-      if (span.text)
+      if (span.text) {
+        const font = span.attributes & 1 ? bold : regular
+        const path = font.getPath(span.text, x, y + 15, 15, { kerning: false }).toPathData(2)
         elements.push(
-          `<text x="${x}" y="${y + 15}" fill="${foreground}"${span.attributes & 1 ? ' font-weight="700"' : ''}>${escapeXml(span.text)}</text>`,
+          `<path d="${path}" fill="${foreground}" aria-label="${escapeXml(span.text)}"/>`,
         )
+      }
       column += span.width
     }
   }
 
-  elements.push('</g>', '</svg>')
+  elements.push('</svg>')
   return elements.join('\n')
+}
+
+async function loadFont(name: 'DejaVuSansMono.ttf' | 'DejaVuSansMono-Bold.ttf') {
+  const bytes = await Bun.file(resolve(import.meta.dir, 'fonts', name)).arrayBuffer()
+  return parse(bytes)
 }
 
 function color([red, green, blue, alpha]: [number, number, number, number], fallback: string) {
