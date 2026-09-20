@@ -94,7 +94,7 @@ test('covers successful and manually stopped lifecycle transitions', async () =>
 })
 
 test('allows cleanup retry after an interrupted gated stop', async () => {
-  const stopped = await Effect.runPromise(
+  const result = await Effect.runPromise(
     Effect.gen(function* () {
       const driver = makeRecordingProcessDriver()
       const controller = yield* createWorkspaceController([definition('Web')]).pipe(
@@ -109,6 +109,7 @@ test('allows cleanup retry after an interrupted gated stop', async () => {
         .pipe(Effect.forkScoped)
       yield* interruptedGate.reached
       yield* Fiber.interrupt(interruptedStop)
+      expect(pane(yield* controller.snapshot, 'Web').lifecycle._tag).toBe('Stopping')
 
       const retryGate = yield* driver.gateCleanup('Web', 1)
       const retry = yield* controller
@@ -116,11 +117,15 @@ test('allows cleanup retry after an interrupted gated stop', async () => {
         .pipe(Effect.forkScoped)
       yield* retryGate.reached
       yield* retryGate.release
-      return yield* Fiber.join(retry)
+      const stopped = yield* Fiber.join(retry)
+      const process = driver.process('Web', 1)
+      return { active: process.active, cleanupAttempts: process.cleanupAttempts, stopped }
     }).pipe(Effect.scoped),
   )
 
-  expect(pane(stopped, 'Web').lifecycle._tag).toBe('Stopped')
+  expect(pane(result.stopped, 'Web').lifecycle._tag).toBe('Stopped')
+  expect(result.cleanupAttempts).toBe(1)
+  expect(result.active).toBe(false)
 })
 
 test('drives typed lifecycle, opaque output, input, and resize through one controller', async () => {

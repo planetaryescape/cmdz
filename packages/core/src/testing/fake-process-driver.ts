@@ -56,9 +56,10 @@ export function makeRecordingProcessDriver(): RecordingProcessDriver {
     const key = runKey(request.name, request.run)
     const startGate = startGates.get(key)
     if (startGate) {
-      yield* startGate.onReach
-      yield* startGate.awaitRelease
-      startGates.delete(key)
+      yield* startGate.onReach.pipe(
+        Effect.andThen(startGate.awaitRelease),
+        Effect.ensuring(Effect.sync(() => startGates.delete(key))),
+      )
     }
     if (startFailures.has(request.name))
       return yield* Effect.fail(new ProcessStartError({ operation: 'spawn' }))
