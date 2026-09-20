@@ -152,6 +152,7 @@ test('allows explicit stop to retry failed cleanup', async () => {
     target: { _tag: 'Stopped' },
     cleanup: { _tag: 'Failed' },
   })
+  expect(renderStatus(pane(result.failed, 'Web').lifecycle)).toBe('cleanup failed')
   expect(pane(result.stopped, 'Web').lifecycle).toEqual({
     _tag: 'Ready',
     lastRun: 1,

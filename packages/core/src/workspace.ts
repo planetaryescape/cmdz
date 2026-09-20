@@ -249,7 +249,7 @@ export function renderStatus(lifecycle: PaneLifecycle) {
     case 'Running':
       return 'running'
     case 'Cleaning':
-      return lifecycle.cleanup._tag === 'Failed' ? 'failed' : 'stopping'
+      return lifecycle.cleanup._tag === 'Failed' ? 'cleanup failed' : 'stopping'
   }
 }
 
