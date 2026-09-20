@@ -156,11 +156,14 @@ function startPty(
   }).pipe(Effect.uninterruptible)
 }
 
-export const ptyProcessDriver = ProcessDriver.of({
-  start: (request) => startPty(request, () => {}),
-})
+const make = (attach: (terminal: Bun.Terminal | undefined) => void) =>
+  ProcessDriver.of({
+    start: (request) => startPty(request, attach),
+  })
 
-export const ptyProcessDriverLayer = Layer.succeed(ProcessDriver, ptyProcessDriver)
+export const makePtyProcessDriver = () => make(() => {})
+
+export const ptyProcessDriverLayer = Layer.sync(ProcessDriver, makePtyProcessDriver)
 
 export const runPty = Effect.fn('process.run.compatibility')(function* (
   command: readonly [string, ...string[]],
@@ -170,17 +173,15 @@ export const runPty = Effect.fn('process.run.compatibility')(function* (
     readonly env?: Readonly<Record<string, string | undefined>>
   } = {},
 ) {
-  const run = yield* startPty(
-    {
-      name: 'compatibility',
-      run: 1,
-      command,
-      cwd: options.cwd ?? process.cwd(),
-      env: options.env ?? process.env,
-      size: { columns: port.columns, rows: port.rows },
-      output: port.output,
-    },
-    port.attach,
-  )
+  const driver = make(port.attach)
+  const run = yield* driver.start({
+    name: 'compatibility',
+    run: 1,
+    command,
+    cwd: options.cwd ?? process.cwd(),
+    env: options.env ?? process.env,
+    size: { columns: port.columns, rows: port.rows },
+    output: port.output,
+  })
   return yield* run.awaitExit.pipe(Effect.onExit(() => run.cleanup))
 })

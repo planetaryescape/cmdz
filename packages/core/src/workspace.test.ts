@@ -34,6 +34,100 @@ function runOf(snapshot: WorkspaceSnapshot, name: string) {
   return lifecycle._tag === 'Idle' ? lifecycle.lastRun : lifecycle.run
 }
 
+const awaitLifecycle = (
+  controller: { readonly snapshots: Stream.Stream<WorkspaceSnapshot> },
+  name: string,
+  tag: PaneSnapshot['lifecycle']['_tag'],
+) =>
+  controller.snapshots.pipe(
+    Stream.filter((snapshot) => pane(snapshot, name).lifecycle._tag === tag),
+    Stream.take(1),
+    Stream.runDrain,
+  )
+
+test('covers successful and manually stopped lifecycle transitions', async () => {
+  const transitions = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = makeRecordingProcessDriver()
+      const controller = yield* createWorkspaceController([definition('Web')]).pipe(
+        Effect.provide(driver.layer),
+      )
+      yield* controller.initialize({ Web: size })
+
+      const successfulTransitions = yield* controller.snapshots.pipe(
+        Stream.map((snapshot) => pane(snapshot, 'Web').lifecycle._tag),
+        Stream.take(4),
+        Stream.runCollect,
+        Effect.forkScoped,
+      )
+      const startGate = yield* driver.gateStart('Web', 1)
+      const start = yield* controller
+        .dispatch({ type: 'start', name: 'Web', size })
+        .pipe(Effect.forkScoped)
+      yield* startGate.reached
+      expect(pane(yield* controller.snapshot, 'Web').lifecycle._tag).toBe('Starting')
+      yield* startGate.release
+      yield* Fiber.join(start)
+      yield* driver.process('Web', 1).exit(0)
+      const succeeded = yield* awaitLifecycle(controller, 'Web', 'Succeeded').pipe(
+        Effect.forkScoped,
+      )
+      yield* Fiber.join(succeeded)
+
+      const cleanupGate = yield* driver.gateCleanup('Web', 2)
+      yield* controller.dispatch({ type: 'start', name: 'Web', size })
+      const stop = yield* controller.dispatch({ type: 'stop', name: 'Web' }).pipe(Effect.forkScoped)
+      yield* cleanupGate.reached
+      expect(pane(yield* controller.snapshot, 'Web').lifecycle._tag).toBe('Stopping')
+      yield* cleanupGate.release
+      const stopped = yield* Fiber.join(stop)
+
+      return {
+        stopped: pane(stopped, 'Web').lifecycle._tag,
+        successful: Array.from(yield* Fiber.join(successfulTransitions)),
+      }
+    }).pipe(Effect.scoped),
+  )
+
+  expect(transitions.successful).toEqual(['Idle', 'Starting', 'Running', 'Succeeded'])
+  expect(transitions.stopped).toBe('Stopped')
+})
+
+test('allows cleanup retry after an interrupted gated stop', async () => {
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = makeRecordingProcessDriver()
+      const controller = yield* createWorkspaceController([definition('Web')]).pipe(
+        Effect.provide(driver.layer),
+      )
+      yield* controller.initialize({ Web: size })
+      yield* controller.dispatch({ type: 'start', name: 'Web', size })
+
+      const interruptedGate = yield* driver.gateCleanup('Web', 1)
+      const interruptedStop = yield* controller
+        .dispatch({ type: 'stop', name: 'Web' })
+        .pipe(Effect.forkScoped)
+      yield* interruptedGate.reached
+      yield* Fiber.interrupt(interruptedStop)
+      expect(pane(yield* controller.snapshot, 'Web').lifecycle._tag).toBe('Stopping')
+
+      const retryGate = yield* driver.gateCleanup('Web', 1)
+      const retry = yield* controller
+        .dispatch({ type: 'stop', name: 'Web' })
+        .pipe(Effect.forkScoped)
+      yield* retryGate.reached
+      yield* retryGate.release
+      const stopped = yield* Fiber.join(retry)
+      const process = driver.process('Web', 1)
+      return { active: process.active, cleanupAttempts: process.cleanupAttempts, stopped }
+    }).pipe(Effect.scoped),
+  )
+
+  expect(pane(result.stopped, 'Web').lifecycle._tag).toBe('Stopped')
+  expect(result.cleanupAttempts).toBe(1)
+  expect(result.active).toBe(false)
+})
+
 test('drives typed lifecycle, opaque output, input, and resize through one controller', async () => {
   const result = await Effect.runPromise(
     Effect.gen(function* () {
@@ -145,6 +239,7 @@ test('waits for cleanup before restart and rejects output from the previous run'
           bytes: new TextEncoder().encode('stale-response'),
         }),
       )
+      const staleExitAccepted = yield* first.exit(17)
       const fresh = new TextEncoder().encode('fresh')
       second.emit(fresh)
       return {
@@ -153,6 +248,7 @@ test('waits for cleanup before restart and rejects output from the previous run'
         fresh,
         second,
         snapshot: yield* controller.snapshot,
+        staleExitAccepted,
         staleResponse,
       }
     }).pipe(Effect.scoped),
@@ -162,6 +258,7 @@ test('waits for cleanup before restart and rejects output from the previous run'
   expect(result.first.active).toBe(false)
   expect(result.second.run).toBe(result.first.run + 1)
   expect(result.staleResponse._tag).toBe('Failure')
+  expect(result.staleExitAccepted).toBe(false)
   expect(result.second.input).toEqual([])
   expect(result.events.filter((event) => event.type === 'output')).toEqual([
     { type: 'output', name: 'Web', run: 2, bytes: result.fresh },
@@ -280,6 +377,79 @@ test('initializes autostart once, keeps optional panes idle, and resizes every a
   expect(result.driver.process('Worker', 1).sizes.at(-1)).toEqual({ columns: 78, rows: 20 })
   expect(result.driver.runs.has('Optional:1')).toBe(false)
   expect(result.duplicate._tag).toBe('Failure')
+})
+
+test('restores every prior terminal outcome when shutdown retries cleanup', async () => {
+  const outcomes = [
+    {
+      kind: 'success',
+      expected: { _tag: 'Succeeded', run: 1, exitCode: 0 },
+    },
+    {
+      kind: 'exit',
+      expected: { _tag: 'Failed', run: 1, failure: { _tag: 'Exited', exitCode: 23 } },
+    },
+    {
+      kind: 'runtime',
+      expected: {
+        _tag: 'Failed',
+        run: 1,
+        failure: { _tag: 'RuntimeFailed', operation: 'read' },
+      },
+    },
+    {
+      kind: 'stop',
+      expected: { _tag: 'Stopped', run: 1 },
+    },
+  ] as const
+
+  const results = await Effect.runPromise(
+    Effect.forEach(outcomes, (outcome) =>
+      Effect.gen(function* () {
+        const driver = makeRecordingProcessDriver()
+        const controller = yield* createWorkspaceController([definition('Web')]).pipe(
+          Effect.provide(driver.layer),
+        )
+        yield* controller.initialize({ Web: size })
+        yield* controller.dispatch({ type: 'start', name: 'Web', size })
+        driver.failCleanup('Web', 1)
+
+        if (outcome.kind === 'stop') {
+          yield* controller.dispatch({ type: 'stop', name: 'Web' })
+        } else {
+          const cleanupFailed = yield* awaitLifecycle(controller, 'Web', 'Failed').pipe(
+            Effect.forkScoped,
+          )
+          if (outcome.kind === 'runtime') yield* driver.process('Web', 1).fail('read')
+          else yield* driver.process('Web', 1).exit(outcome.kind === 'success' ? 0 : 23)
+          yield* Fiber.join(cleanupFailed)
+        }
+
+        const failed = pane(yield* controller.snapshot, 'Web').lifecycle
+        expect(failed).toMatchObject({
+          _tag: 'Failed',
+          failure: { _tag: 'CleanupFailed' },
+        })
+        yield* controller.shutdown
+        const lifecycle: PaneSnapshot['lifecycle'] = pane(
+          yield* controller.snapshot,
+          'Web',
+        ).lifecycle
+        return {
+          attempts: driver.process('Web', 1).cleanupAttempts,
+          kind: outcome.kind,
+          lifecycle,
+        }
+      }),
+    ).pipe(Effect.scoped),
+  )
+
+  for (const result of results) {
+    const expected = outcomes.find((outcome) => outcome.kind === result.kind)
+    if (!expected) throw new Error(`Missing expected lifecycle for ${result.kind}`)
+    expect(result.attempts).toBe(2)
+    expect(result.lifecycle).toEqual(expected.expected)
+  }
 })
 
 test('retries failed pane cleanup during shutdown and still cleans every peer', async () => {
