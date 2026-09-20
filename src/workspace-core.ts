@@ -16,6 +16,7 @@ export type PaneFailure = Data.TaggedEnum<{
     readonly operation: string
     readonly processGroupId?: number | undefined
     readonly priorExitCode?: number | undefined
+    readonly priorRuntimeOperation?: string | undefined
     readonly stopRequested?: boolean | undefined
   }
 }>
@@ -231,6 +232,7 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
                   operation: cleanup.failure.operation,
                   processGroupId: cleanup.failure.processGroupId,
                   priorExitCode: exitCode,
+                  priorRuntimeOperation: runtimeOperation,
                   stopRequested: pane.lifecycle._tag === 'Stopping',
                 }),
               }),
@@ -487,6 +489,10 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
             pane?.lifecycle._tag === 'Failed' && pane.lifecycle.failure._tag === 'CleanupFailed'
               ? pane.lifecycle.failure.stopRequested
               : undefined
+          const priorRuntimeOperation =
+            pane?.lifecycle._tag === 'Failed' && pane.lifecycle.failure._tag === 'CleanupFailed'
+              ? pane.lifecycle.failure.priorRuntimeOperation
+              : undefined
           failures.push({
             name,
             run: active.run,
@@ -503,6 +509,7 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
                 operation: cleanup.failure.operation,
                 processGroupId: cleanup.failure.processGroupId,
                 priorExitCode,
+                priorRuntimeOperation,
                 stopRequested,
               }),
             }),
@@ -517,6 +524,17 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
               : undefined
           if (failedCleanup?.stopRequested)
             yield* setPaneLifecycle(name, active.run, PaneLifecycle.Stopped({ run: active.run }))
+          else if (failedCleanup?.priorRuntimeOperation)
+            yield* setPaneLifecycle(
+              name,
+              active.run,
+              PaneLifecycle.Failed({
+                run: active.run,
+                failure: PaneFailure.RuntimeFailed({
+                  operation: failedCleanup.priorRuntimeOperation,
+                }),
+              }),
+            )
           else if (failedCleanup?.priorExitCode === 0)
             yield* setPaneLifecycle(
               name,

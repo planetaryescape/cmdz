@@ -85,7 +85,14 @@ function startPty(
     )
 
     if (!child.terminal) {
-      yield* Effect.result(cleanup)
+      const cleanupResult = yield* Effect.result(cleanup)
+      if (Result.isFailure(cleanupResult))
+        return yield* Effect.fail(
+          new ProcessStartError({
+            operation: cleanupResult.failure.operation,
+            processGroupId: cleanupResult.failure.processGroupId,
+          }),
+        )
       return yield* Effect.fail(new ProcessStartError({ operation: 'attach' }))
     }
     const attached = yield* Effect.result(
@@ -95,7 +102,14 @@ function startPty(
       }),
     )
     if (Result.isFailure(attached)) {
-      yield* Effect.result(cleanup)
+      const cleanupResult = yield* Effect.result(cleanup)
+      if (Result.isFailure(cleanupResult))
+        return yield* Effect.fail(
+          new ProcessStartError({
+            operation: cleanupResult.failure.operation,
+            processGroupId: cleanupResult.failure.processGroupId,
+          }),
+        )
       return yield* Effect.fail(attached.failure)
     }
     const run: ProcessRun = {

@@ -7,6 +7,7 @@ export interface TerminalSize {
 
 export class ProcessStartError extends Data.TaggedError('ProcessStartError')<{
   readonly operation: string
+  readonly processGroupId?: number | undefined
 }> {}
 
 export class ProcessIoError extends Data.TaggedError('ProcessIoError')<{
