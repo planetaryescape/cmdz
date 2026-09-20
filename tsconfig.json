@@ -15,5 +15,5 @@
     "noImplicitOverride": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src/**/*.ts", "cmdz.ts", "oxlint.config.ts"]
+  "include": ["packages/**/*.ts", "cmdz.ts", "cmdz.d.ts", "oxlint.config.ts"]
 }

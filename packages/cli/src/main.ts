@@ -1,3 +1,4 @@
+import { WorkspaceShutdownError } from '@cmdz/core/workspace'
 import { Cause, Effect, Exit, Option } from 'effect'
 
 import { Command } from './command'
@@ -5,7 +6,6 @@ import { loadConfig } from './config'
 import { formatShutdownDiagnostic } from './shutdown-diagnostic'
 import { telemetry } from './telemetry'
 import { terminalSession } from './terminal-session'
-import { WorkspaceShutdownError } from './workspace-core'
 
 Bun.plugin({
   name: 'cmdz-config-api',

@@ -1,12 +1,12 @@
 import { Data, Effect, Queue, Result, Semaphore, Stream, SubscriptionRef, type Scope } from 'effect'
 
-import type { ProcessDefinition } from './config'
 import {
   ProcessDriver,
   type ProcessIoError,
   type ProcessRun,
   type TerminalSize,
 } from './process-driver'
+import type { WorkspaceDefinition } from './workspace-definition'
 
 export type PaneFailure = Data.TaggedEnum<{
   readonly StartFailed: { readonly operation: string }
@@ -165,7 +165,7 @@ export function renderStatus(lifecycle: PaneLifecycle) {
 }
 
 export const createWorkspaceController = Effect.fn('workspace.controller.make')(function* (
-  definitions: readonly ProcessDefinition[],
+  definitions: readonly WorkspaceDefinition[],
 ): Effect.fn.Return<WorkspaceController, never, Scope.Scope | ProcessDriver> {
   const driver = yield* ProcessDriver
   const first = definitions[0]
@@ -300,7 +300,7 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
             run,
             command: ['/bin/sh', '-c', definition.command],
             cwd: definition.cwd,
-            env: { ...process.env, ...definition.env },
+            env: definition.env,
             size,
             output: (bytes) => {
               const current = SubscriptionRef.getUnsafe(state)

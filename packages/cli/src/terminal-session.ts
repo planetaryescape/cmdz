@@ -1,17 +1,15 @@
+import type { WorkspaceDefinition } from '@cmdz/core/workspace-definition'
 import { createCliRenderer } from '@opentui/core'
 import { Cause, Effect, Exit, Schema } from 'effect'
 
-import type { ProcessDefinition } from './config'
-import { renderProcessWorkspace } from './process-workspace'
-import { ptyProcessDriverLayer } from './pty-process'
-import { createWorkspaceController } from './workspace-core'
+import { runWorkspace } from './workspace-session'
 
 class TerminalSessionError extends Schema.TaggedError<TerminalSessionError>()(
   'TerminalSessionError',
   { message: Schema.String },
 ) {}
 
-export const terminalSession = (definitions: readonly ProcessDefinition[]) =>
+export const terminalSession = (definitions: readonly WorkspaceDefinition[]) =>
   Effect.gen(function* () {
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
       return yield* Effect.fail(
@@ -38,10 +36,7 @@ export const terminalSession = (definitions: readonly ProcessDefinition[]) =>
     )
 
     yield* Effect.logInfo('Terminal session ready')
-    const controller = yield* createWorkspaceController(definitions).pipe(
-      Effect.provide(ptyProcessDriverLayer),
-    )
-    yield* renderProcessWorkspace(renderer, definitions, controller)
+    yield* runWorkspace(renderer, definitions)
   }).pipe(
     Effect.scoped,
     Effect.onExit((exit) => {

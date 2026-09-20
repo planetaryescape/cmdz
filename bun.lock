@@ -4,10 +4,6 @@
   "workspaces": {
     "": {
       "name": "cmdz",
-      "dependencies": {
-        "@opentui/core": "0.5.10",
-        "effect": "4.0.0-rc.112",
-      },
       "devDependencies": {
         "@oxlint/plugins": "1.81.0",
         "@types/bun": "1.4.1",
@@ -16,8 +12,37 @@
         "oxlint": "1.81.0",
       },
     },
+    "packages/cli": {
+      "name": "@cmdz/cli",
+      "dependencies": {
+        "@cmdz/core": "workspace:*",
+        "@cmdz/tui": "workspace:*",
+        "@opentui/core": "0.5.10",
+        "effect": "4.0.0-rc.112",
+      },
+    },
+    "packages/core": {
+      "name": "@cmdz/core",
+      "dependencies": {
+        "effect": "4.0.0-rc.112",
+      },
+    },
+    "packages/tui": {
+      "name": "@cmdz/tui",
+      "dependencies": {
+        "@cmdz/core": "workspace:*",
+        "@opentui/core": "0.5.10",
+        "effect": "4.0.0-rc.112",
+      },
+    },
   },
   "packages": {
+    "@cmdz/cli": ["@cmdz/cli@workspace:packages/cli"],
+
+    "@cmdz/core": ["@cmdz/core@workspace:packages/core"],
+
+    "@cmdz/tui": ["@cmdz/tui@workspace:packages/tui"],
+
     "@msgpackr-extract/msgpackr-extract-darwin-arm64": ["@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.4", "", { "os": "darwin", "cpu": "arm64" }, "sha512-LCkGo6JDfaBhgST7UpPWgNgLINpcpabaHfyz5OBx75nUYxBsaEPxjnyNjWpeb/xBup/682QnBfRBy2/LvPutZQ=="],
 
     "@msgpackr-extract/msgpackr-extract-darwin-x64": ["@msgpackr-extract/msgpackr-extract-darwin-x64@3.0.4", "", { "os": "darwin", "cpu": "x64" }, "sha512-zExlW9zUJKZH/tOtVMttwjKa4Xm/3KcNjnE3dPN92uCktwavMxpgCA3MoJK/DOnTWsQgo224OaST27/mPNAf+w=="],

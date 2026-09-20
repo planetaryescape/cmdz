@@ -1,0 +1,15 @@
+{
+  "name": "@cmdz/cli",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test src",
+    "typecheck": "tsgo --noEmit"
+  },
+  "dependencies": {
+    "@cmdz/core": "workspace:*",
+    "@cmdz/tui": "workspace:*",
+    "@opentui/core": "0.5.10",
+    "effect": "4.0.0-rc.112"
+  }
+}

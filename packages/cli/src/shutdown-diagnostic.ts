@@ -1,4 +1,4 @@
-import type { WorkspaceShutdownError } from './workspace-core'
+import type { WorkspaceShutdownError } from '@cmdz/core/workspace'
 
 export function formatShutdownDiagnostic(error: WorkspaceShutdownError) {
   const lines = ['cmdz could not clean up every process.']

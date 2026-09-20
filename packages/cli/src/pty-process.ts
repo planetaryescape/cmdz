@@ -1,5 +1,3 @@
-import { Effect, Layer, Option, Result, Semaphore } from 'effect'
-
 import {
   ProcessCleanupError,
   ProcessDriver,
@@ -9,7 +7,8 @@ import {
   ProcessStartError,
   type ProcessStartRequest,
   normalizeTerminalSize,
-} from './process-driver'
+} from '@cmdz/core/process-driver'
+import { Effect, Layer, Option, Result, Semaphore } from 'effect'
 
 interface TerminalPort {
   readonly columns: number
@@ -39,7 +38,7 @@ function startPty(
         Bun.spawn([...request.command], {
           detached: true,
           cwd: request.cwd,
-          env: { ...request.env, TERM: 'xterm-256color' },
+          env: { ...process.env, ...request.env, TERM: 'xterm-256color' },
           terminal: {
             cols: initialSize.columns,
             rows: initialSize.rows,

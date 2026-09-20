@@ -41,7 +41,7 @@ test('passes a resolved cwd and environment overlay to the shell', async () => {
           output += new TextDecoder().decode(bytes)
         },
       },
-      { cwd, env: { ...process.env, CMDZ_TEST_VALUE: 'overridden' } },
+      { cwd, env: { CMDZ_TEST_VALUE: 'overridden' } },
     ),
   )
   expect(code).toBe(0)
