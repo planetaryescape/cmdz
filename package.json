@@ -7,6 +7,7 @@
   "workspaces": ["packages/*"],
   "scripts": {
     "dev": "bun run packages/cli/src/main.ts",
+    "capture:tui": "bun run packages/cli/src/testing/capture-workspace.ts",
     "build:binary": "bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig packages/cli/src/main.ts --outfile dist/cmdz && ([ \"$(uname -s)\" != Darwin ] || codesign --force --sign - dist/cmdz)",
     "test:binary": "bun run build:binary && python3 scripts/standalone-smoke.py dist/cmdz",
     "test": "bun --filter=@cmdz/core run test && bun --filter=@cmdz/tui run test && bun --filter=@cmdz/cli run test",
