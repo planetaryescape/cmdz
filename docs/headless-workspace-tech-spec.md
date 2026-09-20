@@ -213,7 +213,7 @@ The OpenTUI adapter projects `PaneLifecycle` to text:
 function renderStatus(lifecycle: PaneLifecycle): string
 ```
 
-The projection returns `idle`, `starting`, `running`, `stopping`, `stopped`, `succeeded`, `failed (<code>)`, or `failed` for start, runtime, and cleanup failures. Natural and runtime completion visibly enter `stopping` while PTY resources are being cleaned.
+The projection returns `idle`, `starting`, `running`, `stopping`, `stopped`, `succeeded`, `failed (<code>)`, `failed` for start and runtime failures, or `cleanup failed` when the controller still owns a run after failed cleanup. Natural and runtime completion visibly enter `stopping` while PTY resources are being cleaned; a selected cleanup failure also replaces the navigation footer with explicit retry-only and retry-and-restart actions.
 
 ## Types, Interfaces, and APIs
 

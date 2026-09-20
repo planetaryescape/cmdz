@@ -1,14 +1,13 @@
 import { expect, test } from 'bun:test'
 
+import { makeRecordingProcessDriver } from '@cmdz/core/testing'
 import { createWorkspaceController } from '@cmdz/core/workspace'
 import type { WorkspaceDefinition } from '@cmdz/core/workspace-definition'
 import { renderWorkspaceView } from '@cmdz/tui/workspace-view'
 import { createTestRenderer } from '@opentui/core/testing'
 import { Effect } from 'effect'
 
-import { makeRecordingProcessDriver } from '../../core/src/testing/fake-process-driver'
-
-test('surfaces failed cleanup and lets the user retry it', async () => {
+test('surfaces failed cleanup and supports retry-only and retry-restart actions', async () => {
   const ui = await createTestRenderer({ width: 100, height: 30, kittyKeyboard: false })
   const driver = makeRecordingProcessDriver()
   const definition: WorkspaceDefinition = {
@@ -51,6 +50,17 @@ test('surfaces failed cleanup and lets the user retry it', async () => {
     ui.mockInput.pressKey('x')
     await waitForText('Demo [stopped]')
     expect(driver.process('Demo', 1).cleanupAttempts).toBe(2)
+
+    ui.mockInput.pressEnter()
+    await waitForText('Demo [running]')
+    driver.failCleanup('Demo', 2)
+    ui.mockInput.pressKey('x')
+    await waitForText('Demo [cleanup failed]')
+    ui.mockInput.pressKey('r')
+    await waitForText('Demo [running]')
+    expect(driver.process('Demo', 2).cleanupAttempts).toBe(2)
+    expect(driver.process('Demo', 3).active).toBe(true)
+
     ui.mockInput.pressKey('q')
     expect((await running)._tag).toBe('Success')
   } finally {
