@@ -1,4 +1,4 @@
-import { Effect, Layer, Result } from 'effect'
+import { Effect, Layer, Option, Result, Semaphore } from 'effect'
 
 import {
   ProcessCleanupError,
@@ -26,26 +26,6 @@ function signalGroup(pid: number, signal: NodeJS.Signals) {
   }
 }
 
-async function raceTimeout<A, B>(promise: Promise<A>, milliseconds: number, timeout: () => B) {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<B>((resolve, reject) => {
-        timer = setTimeout(() => {
-          try {
-            resolve(timeout())
-          } catch (error) {
-            reject(error)
-          }
-        }, milliseconds)
-      }),
-    ])
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
 function startPty(
   request: ProcessStartRequest,
   attach: (terminal: Bun.Terminal | undefined) => void,
@@ -68,43 +48,41 @@ function startPty(
       catch: () => new ProcessStartError({ operation: 'spawn' }),
     })
 
-    let cleanupPromise: Promise<void> | undefined
+    const cleanupLock = yield* Semaphore.make(1)
     let cleaned = false
-    const cleanup = Effect.tryPromise({
-      try: () => {
-        if (cleaned) return Promise.resolve()
-        if (cleanupPromise) return cleanupPromise
-        cleanupPromise = (async () => {
+    const awaitExit = Effect.tryPromise({
+      try: () => child.exited,
+      catch: () => new ProcessCleanupError({ operation: 'wait', processGroupId: child.pid }),
+    })
+    const cleanup = cleanupLock.withPermit(
+      Effect.gen(function* () {
+        if (cleaned) return
+        yield* Effect.sync(() => {
           try {
-            try {
-              attach(undefined)
-            } catch {
-              // The process group must be released even if the terminal adapter has already failed.
-            }
-            signalGroup(child.pid, 'SIGTERM')
-            await raceTimeout(child.exited, 3000, () => undefined)
-            signalGroup(child.pid, 'SIGKILL')
-            await child.exited
-            await raceTimeout(drained.promise, 1000, () => {
-              throw new ProcessCleanupError({
-                operation: 'drain',
-                processGroupId: child.pid,
-              })
-            })
-            cleaned = true
-          } finally {
-            child.terminal?.close()
+            attach(undefined)
+          } catch {
+            // The process group must be released even if the terminal adapter has already failed.
           }
-        })().finally(() => {
-          cleanupPromise = undefined
         })
-        return cleanupPromise
-      },
-      catch: (error) =>
-        error instanceof ProcessCleanupError
-          ? error
-          : new ProcessCleanupError({ operation: 'cleanup', processGroupId: child.pid }),
-    }).pipe(Effect.withSpan('process.release'))
+        yield* Effect.sync(() => signalGroup(child.pid, 'SIGTERM'))
+        const exitedAfterTerm = yield* awaitExit.pipe(Effect.timeoutOption('3 seconds'))
+        if (Option.isNone(exitedAfterTerm)) {
+          yield* Effect.sync(() => signalGroup(child.pid, 'SIGKILL'))
+          yield* awaitExit
+        }
+        const drainedTerminal = yield* Effect.promise(() => drained.promise).pipe(
+          Effect.timeoutOption('1 second'),
+        )
+        if (Option.isNone(drainedTerminal))
+          return yield* Effect.fail(
+            new ProcessCleanupError({ operation: 'drain', processGroupId: child.pid }),
+          )
+        cleaned = true
+      }).pipe(
+        Effect.ensuring(Effect.sync(() => child.terminal?.close())),
+        Effect.withSpan('process.release'),
+      ),
+    )
 
     if (!child.terminal) {
       yield* Effect.result(cleanup)
