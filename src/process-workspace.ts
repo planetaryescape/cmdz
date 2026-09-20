@@ -1,27 +1,37 @@
 import { BoxRenderable, TextRenderable, type CliRenderer, type KeyEvent } from '@opentui/core'
-import { Cause, Effect, Fiber, Queue } from 'effect'
+import { Effect, Queue, Stream } from 'effect'
 
 import type { ProcessDefinition } from './config'
+import { normalizeTerminalSize, type TerminalSize } from './process-driver'
 import { ProcessPane } from './process-pane'
-import { runPty } from './pty-process'
+import { ptyProcessDriverLayer } from './pty-process'
 import { createShortcutHelp } from './shortcut-help'
+import {
+  createWorkspaceController,
+  renderStatus,
+  type PaneLifecycle,
+  type WorkspaceCommand,
+  type WorkspaceController,
+  type WorkspaceEvent,
+  type WorkspaceSnapshot,
+} from './workspace-core'
 
-type Action =
+type UiAction =
   | { readonly type: 'quit' }
-  | { readonly type: 'start' | 'stop' | 'restart'; readonly pane: ProcessPane }
-  | {
-      readonly type: 'exited'
-      readonly pane: ProcessPane
-      readonly run: number
-      readonly code: number
-    }
-  | { readonly type: 'failed'; readonly pane: ProcessPane; readonly run: number }
+  | { readonly type: 'command'; readonly command: WorkspaceCommand }
 
-export const processWorkspace = Effect.fn('process.workspace')(function* (
+function isActive(lifecycle: PaneLifecycle) {
+  return (
+    lifecycle._tag === 'Starting' || lifecycle._tag === 'Running' || lifecycle._tag === 'Stopping'
+  )
+}
+
+export const renderProcessWorkspace = Effect.fn('process.workspace')(function* (
   renderer: CliRenderer,
   definitions: readonly ProcessDefinition[],
+  controller: WorkspaceController,
 ) {
-  const actions = yield* Queue.unbounded<Action>()
+  const actions = yield* Queue.unbounded<UiAction>()
   const header = new TextRenderable(renderer, { id: 'status', height: 1 })
   const footer = new TextRenderable(renderer, { id: 'help', height: 1 })
   const row = new BoxRenderable(renderer, { id: 'workspace', flexDirection: 'row', flexGrow: 1 })
@@ -34,41 +44,120 @@ export const processWorkspace = Effect.fn('process.workspace')(function* (
   renderer.root.add(footer)
   const help = createShortcutHelp(renderer)
   renderer.root.add(help)
-  const panes = definitions.map((definition, index) => new ProcessPane(definition, renderer, index))
-  let selected = panes[0]
-  if (!selected) return
-  const inheritedEnv = { ...process.env }
-  const sorted = () =>
-    [...panes].sort((a, b) => Number(b.active) - Number(a.active) || a.index - b.index)
-  const drawStatus = () => {
-    if (!selected || header.isDestroyed || sidebar.isDestroyed || footer.isDestroyed) return
-    const focused = selected.terminal.focused
-    header.content = `cmdz  |  ${selected.definition.title} [${selected.status}]  |  ${focused ? 'INPUT' : 'NAVIGATION'}`
-    footer.content = focused
+
+  const offer = (command: WorkspaceCommand) =>
+    Queue.offerUnsafe(actions, { type: 'command', command })
+  const panes = definitions.map(
+    (definition, index) =>
+      new ProcessPane(definition, renderer, index, {
+        onData: (name, run, bytes, source) =>
+          offer({
+            type: 'write',
+            name,
+            source: source === 'response' ? 'terminalResponse' : 'user',
+            bytes,
+            run: source === 'response' ? run : undefined,
+          }),
+        onResize: (name, columns, rows) =>
+          offer({ type: 'resize', name, size: normalizeTerminalSize(columns, rows) }),
+      }),
+  )
+  const panesByName = new Map(panes.map((pane) => [pane.definition.name, pane]))
+  for (const pane of panes) body.add(pane.terminal)
+  let snapshot = yield* controller.snapshot
+  let pendingSelected = snapshot.selected
+  let pendingSidebarVisible = snapshot.sidebarVisible
+
+  const selectedPane = () => panesByName.get(snapshot.selected)
+  const selectedSnapshot = () => snapshot.panes.find((pane) => pane.name === snapshot.selected)
+  const sortedPanes = () =>
+    [...panes].sort((left, right) => {
+      const leftState = snapshot.panes.find((pane) => pane.name === left.definition.name)
+      const rightState = snapshot.panes.find((pane) => pane.name === right.definition.name)
+      return (
+        Number(rightState ? isActive(rightState.lifecycle) : false) -
+          Number(leftState ? isActive(leftState.lifecycle) : false) || left.index - right.index
+      )
+    })
+  const draw = () => {
+    const selected = selectedPane()
+    const selectedState = selectedSnapshot()
+    if (
+      !selected ||
+      !selectedState ||
+      header.isDestroyed ||
+      sidebar.isDestroyed ||
+      footer.isDestroyed
+    )
+      return
+    const input = snapshot.mode === 'input' && selected.terminal.focused
+    header.content = `cmdz  |  ${selected.definition.title} [${renderStatus(selectedState.lifecycle)}]  |  ${input ? 'INPUT' : 'NAVIGATION'}`
+    footer.content = input
       ? 'Ctrl-Z sidebar  |  Ctrl-C interrupts child'
       : 'j/k select | Enter start/focus | h sidebar | x stop | r restart | q quit | ? help'
-    sidebar.content = sorted()
-      .map((pane) => `${pane === selected ? '>' : ' '} ${pane.definition.title}\n  ${pane.status}`)
+    sidebar.visible = snapshot.sidebarVisible
+    sidebar.content = sortedPanes()
+      .map((pane) => {
+        const state = snapshot.panes.find((candidate) => candidate.name === pane.definition.name)
+        return `${pane === selected ? '>' : ' '} ${pane.definition.title}\n  ${state ? renderStatus(state.lifecycle) : 'idle'}`
+      })
       .join('\n')
     for (const pane of panes) pane.terminal.zIndex = pane === selected ? 1 : 0
   }
   const blur = () => {
-    selected?.terminal.blur()
-    drawStatus()
+    selectedPane()?.terminal.blur()
+    offer({ type: 'leaveInput' })
   }
   const bindTerminal = (pane: ProcessPane) => {
     pane.terminal.on('focused', () => {
-      if (help.visible || pane !== selected || pane.status !== 'running') pane.terminal.blur()
-      drawStatus()
+      const state = snapshot.panes.find((candidate) => candidate.name === pane.definition.name)
+      if (
+        help.visible ||
+        snapshot.selected !== pane.definition.name ||
+        state?.lifecycle._tag !== 'Running'
+      )
+        pane.terminal.blur()
+      else offer({ type: 'enterInput', name: pane.definition.name })
+      draw()
     })
-    pane.terminal.on('blurred', drawStatus)
-    body.add(pane.terminal)
+    pane.terminal.on('blurred', () => {
+      if (snapshot.selected === pane.definition.name && snapshot.mode === 'input')
+        offer({ type: 'leaveInput' })
+      draw()
+    })
   }
   for (const pane of panes) bindTerminal(pane)
-  drawStatus()
+  draw()
+
+  const applySnapshot = (next: WorkspaceSnapshot) =>
+    Effect.sync(() => {
+      snapshot = next
+      pendingSelected = snapshot.selected
+      pendingSidebarVisible = snapshot.sidebarVisible
+      if (snapshot.mode === 'navigation' && selectedPane()?.terminal.focused)
+        selectedPane()?.terminal.blur()
+      draw()
+    })
+  const applyEvent = (event: WorkspaceEvent) =>
+    Effect.sync(() => {
+      const pane = panesByName.get(event.name)
+      if (!pane) return
+      if (event.type === 'resetTerminal') {
+        body.remove(pane.terminal)
+        pane.reset(event.run)
+        bindTerminal(pane)
+        body.add(pane.terminal)
+        draw()
+      } else if (pane.run === event.run) pane.terminal.write(event.bytes)
+    })
+  yield* controller.snapshots.pipe(Stream.runForEach(applySnapshot), Effect.forkScoped)
+  yield* controller.events.pipe(Stream.runForEach(applyEvent), Effect.forkScoped)
+  yield* Effect.yieldNow
 
   const onKey = (key: KeyEvent) => {
-    if (!selected) return
+    const selected = panesByName.get(pendingSelected)
+    const state = snapshot.panes.find((pane) => pane.name === pendingSelected)
+    if (!selected || !state) return
     if (help.visible) {
       if (key.name === '?' || key.name === 'escape') help.visible = false
       key.preventDefault()
@@ -84,24 +173,23 @@ export const processWorkspace = Effect.fn('process.workspace')(function* (
       return
     }
     if (key.name === 'return' || key.name === 'enter') {
-      if (selected.pty) {
-        selected.terminal.focus()
-        drawStatus()
-      } else Queue.offerUnsafe(actions, { type: 'start', pane: selected })
+      if (state.lifecycle._tag === 'Running') selected.terminal.focus()
+      else offer({ type: 'start', name: selected.definition.name, size: selected.size() })
     } else if (['j', 'k', 'up', 'down'].includes(key.name)) {
-      const order = sorted()
+      const order = sortedPanes()
       const delta = key.name === 'j' || key.name === 'down' ? 1 : -1
       const next = order[order.indexOf(selected) + delta]
       if (next) {
-        selected = next
-        drawStatus()
+        pendingSelected = next.definition.name
+        offer({ type: 'select', name: next.definition.name })
       }
-    } else if (key.name === '?') {
-      help.visible = true
-    } else if (key.name === 'h') {
-      sidebar.visible = !sidebar.visible
-    } else if (key.name === 'x') Queue.offerUnsafe(actions, { type: 'stop', pane: selected })
-    else if (key.name === 'r') Queue.offerUnsafe(actions, { type: 'restart', pane: selected })
+    } else if (key.name === '?') help.visible = true
+    else if (key.name === 'h') {
+      pendingSidebarVisible = !pendingSidebarVisible
+      offer({ type: 'setSidebarVisible', visible: pendingSidebarVisible })
+    } else if (key.name === 'x') offer({ type: 'stop', name: selected.definition.name })
+    else if (key.name === 'r')
+      offer({ type: 'restart', name: selected.definition.name, size: selected.size() })
     else if (key.name === 'q' || (key.ctrl && key.name === 'c'))
       Queue.offerUnsafe(actions, { type: 'quit' })
     key.preventDefault()
@@ -119,81 +207,36 @@ export const processWorkspace = Effect.fn('process.workspace')(function* (
         renderer.off('destroy', onDestroy)
       }),
   )
-  for (const pane of panes) {
-    if (pane.definition.autostart) yield* Queue.offer(actions, { type: 'start', pane })
-  }
+
+  const initialSizes: Record<string, TerminalSize> = {}
+  for (const pane of panes) initialSizes[pane.definition.name] = pane.size()
+  yield* controller.initialize(initialSizes)
   yield* Effect.logInfo('Process workspace ready')
-  while (true) {
-    const action = yield* Queue.take(actions)
-    if (action.type === 'quit') return
-    const pane = action.pane
-    if (action.type === 'exited' || action.type === 'failed') {
-      if (action.run !== pane.run) continue
-      pane.fiber = undefined
-      pane.status =
-        action.type === 'failed'
-          ? 'failed'
-          : action.code === 0
-            ? 'succeeded'
-            : `failed (${action.code})`
-      if (pane === selected) blur()
-      else drawStatus()
-      continue
+
+  const run = Effect.gen(function* () {
+    while (true) {
+      const action = yield* Queue.take(actions)
+      if (action.type === 'quit') return
+      yield* controller.dispatch(action.command).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning('Workspace command rejected').pipe(
+            Effect.annotateLogs({
+              operation: action.command.type,
+              reason: error._tag === 'WorkspaceCommandError' ? error.reason : error.operation,
+            }),
+          ),
+        ),
+      )
     }
-    if (action.type === 'stop' || action.type === 'restart') {
-      if (pane.fiber) {
-        pane.status = 'stopping'
-        if (pane === selected) blur()
-        yield* Fiber.interrupt(pane.fiber)
-        pane.fiber = undefined
-        pane.run++
-        pane.status = 'stopped'
-        drawStatus()
-      }
-      if (action.type === 'stop') continue
-    }
-    if (pane.fiber) continue
-    pane.run++
-    const generation = pane.run
-    body.remove(pane.terminal)
-    pane.terminal.destroy()
-    pane.terminal = pane.makeTerminal()
-    bindTerminal(pane)
-    pane.status = 'starting'
-    drawStatus()
-    const terminal = pane.terminal
-    const screen = terminal.screen()
-    pane.fiber = yield* runPty(
-      ['/bin/sh', '-c', pane.definition.command],
-      {
-        columns: screen.columns,
-        rows: screen.rows,
-        output: (bytes) => terminal.write(bytes),
-        attach: (value) => {
-          pane.pty = value
-          if (value) {
-            const size = terminal.screen()
-            value.resize(Math.max(1, size.columns), Math.max(1, size.rows))
-            pane.status = 'running'
-            drawStatus()
-          }
-        },
-      },
-      { cwd: pane.definition.cwd, env: { ...inheritedEnv, ...pane.definition.env } },
-    ).pipe(
-      Effect.annotateLogs({ 'command.name': pane.definition.name }),
-      Effect.withSpan('command.run', { attributes: { 'command.name': pane.definition.name } }),
-      Effect.matchCauseEffect({
-        onSuccess: (code) => Queue.offer(actions, { type: 'exited', pane, run: generation, code }),
-        onFailure: (cause) =>
-          Cause.hasInterruptsOnly(cause)
-            ? Effect.void
-            : Effect.logError('Process operation failed').pipe(
-                Effect.andThen(Queue.offer(actions, { type: 'failed', pane, run: generation })),
-              ),
-      }),
-      Effect.asVoid,
-      Effect.forkScoped,
-    )
-  }
+  })
+  yield* run.pipe(Effect.onExit(() => controller.shutdown))
 }, Effect.scoped)
+
+export const processWorkspace = (
+  renderer: CliRenderer,
+  definitions: readonly ProcessDefinition[],
+) =>
+  Effect.gen(function* () {
+    const controller = yield* createWorkspaceController(definitions)
+    yield* renderProcessWorkspace(renderer, definitions, controller)
+  }).pipe(Effect.scoped, Effect.provide(ptyProcessDriverLayer))

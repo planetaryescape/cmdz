@@ -38,13 +38,13 @@ The executable embeds Bun and OpenTUI's native library. Users do not need Bun, N
 
 At runtime, the CLI provides `import { Command } from 'cmdz'` to external TypeScript configs, including local helper modules. Other package imports must resolve from the user's project. The virtual module supplies runtime exports, not editor type declarations.
 
-The build targets the host platform. macOS arm64 is verified; Linux and other architectures still need their own build/runtime checks before release. No installers, signing, or publishing are included yet. [GitHub Actions](.github/workflows/ci.yml) builds and smoke-tests all four macOS/Linux targets and uploads binaries with checksums. Those targets remain unverified until their jobs pass. See [release preparation and signing options](docs/releases.md).
+The build targets the host platform. macOS builds receive ad-hoc signatures; installers, release signing, and publishing are not included yet. [GitHub Actions](.github/workflows/ci.yml) builds and smoke-tests all four macOS/Linux targets and uploads binaries with checksums. Those targets remain unverified until their jobs pass. See [release preparation and signing options](docs/releases.md).
 
 ```sh
 bun run test:binary
 ```
 
-This builds the executable, copies it into a temporary project without `node_modules`, and runs PTY checks with no Bun on `PATH`. It verifies config imports, cwd/env, input, initial dimensions, resizing, sidebar toggle, quit/SIGTERM cleanup, and terminal restoration. Python 3 is required only for this developer smoke test.
+This builds the executable, copies it into a temporary project without `node_modules`, and runs PTY checks with no Bun on `PATH`. It verifies config imports, cwd/env, input, initial dimensions, resizing, sidebar toggle, stop/restart isolation, quit/SIGTERM cleanup, and terminal restoration. Python 3 is required only for this developer smoke test.
 
 Compiled startup disables automatic `.env` and `bunfig.toml` loading. Config files remain trusted executable TypeScript.
 
@@ -94,7 +94,7 @@ All generic anti-slop rules and its Effect rule are enabled. See [lint provenanc
 
 `src/terminal-session.ts` acquires the renderer as an Effect scoped resource and removes input listeners before destroying it. `src/main.ts` translates OS termination signals into Effect interruption. Renderer initialization errors and non-interactive terminals fail visibly.
 
-`src/process-workspace.ts` owns the named process registry, selection, and serialized lifecycle actions. `src/process-pane.ts` holds each process's terminal state. `src/pty-process.ts` owns a Bun PTY and its process group. OpenTUI's built-in `EmbeddedTerminalRenderable` handles ANSI parsing, input encoding, and terminal resizing. No PTY or parser dependency was added.
+`src/workspace-core.ts` is the headless source of truth for command lifecycle, run generations, selection, input mode, sidebar state, and shutdown. It coordinates processes through the contract in `src/process-driver.ts`. `src/process-workspace.ts` translates OpenTUI input into controller commands and renders snapshots and ordered output events. `src/process-pane.ts` owns only each embedded terminal renderable. `src/pty-process.ts` implements the production process driver with Bun PTYs and POSIX process groups. OpenTUI's built-in `EmbeddedTerminalRenderable` handles ANSI parsing, input encoding, and terminal resizing. No PTY or parser dependency was added.
 
 On release, signal the owned process group, wait up to three seconds for the leader, then force-kill remaining group members. Drain pending PTY output with a bounded wait before closing it. Deliberately detached descendants are outside this process-group ownership model.
 
@@ -102,7 +102,7 @@ On release, signal the owned process group, wait up to three seconds for the lea
 bun run test
 ```
 
-Integration tests exercise real PTY output, ANSI/Unicode rendering, exit codes, descendant cleanup, focus/input, resize, stop, restart, and natural exit. Separate real-host PTY trials verified quit and SIGTERM cleanup and terminal restoration. The repository now has a local tsgo type-checking toolchain; it no longer relies on another checkout's compiler.
+Controller tests use a recording process driver to exercise typed lifecycle transitions, stale runs, input boundaries, resize, restart ordering, cleanup retries, and aggregated shutdown failures. Integration tests exercise real PTY output, ANSI/Unicode rendering, exit codes, TERM-to-KILL escalation, idempotent cleanup, descendant cleanup, focus/input, resize, stop, restart, and natural exit. Compiled-binary PTY trials verify stop/restart isolation, quit and SIGTERM cleanup, and terminal restoration.
 
 ## Local telemetry with Motel
 

@@ -1,29 +1,45 @@
 import { EmbeddedTerminalRenderable, type CliRenderer } from '@opentui/core'
-import type { Fiber } from 'effect'
 
 import type { ProcessDefinition } from './config'
+import { normalizeTerminalSize } from './process-driver'
+
+interface ProcessPaneHandlers {
+  readonly onData: (
+    name: string,
+    run: number,
+    bytes: Uint8Array,
+    source: 'input' | 'response',
+  ) => void
+  readonly onResize: (name: string, columns: number, rows: number) => void
+}
 
 export class ProcessPane {
   terminal: EmbeddedTerminalRenderable
-  pty: Bun.Terminal | undefined
-  fiber: Fiber.Fiber<void, never> | undefined
   run = 0
-  status = 'idle'
 
   constructor(
     readonly definition: ProcessDefinition,
     private readonly renderer: CliRenderer,
     readonly index: number,
+    private readonly handlers: ProcessPaneHandlers,
   ) {
     this.terminal = this.makeTerminal()
   }
 
-  get active() {
-    return this.status === 'starting' || this.status === 'running' || this.status === 'stopping'
+  reset(run: number) {
+    this.terminal.destroy()
+    this.run = run
+    this.terminal = this.makeTerminal()
   }
 
-  makeTerminal() {
-    const terminal = new EmbeddedTerminalRenderable(this.renderer, {
+  size() {
+    const screen = this.terminal.screen()
+    return normalizeTerminalSize(screen.columns, screen.rows)
+  }
+
+  private makeTerminal() {
+    const run = this.run
+    return new EmbeddedTerminalRenderable(this.renderer, {
       id: `terminal-${this.index}-${this.run}`,
       position: 'absolute',
       top: 0,
@@ -32,13 +48,9 @@ export class ProcessPane {
       height: '100%',
       maxScrollback: 10000,
       selectable: false,
-      onData: (bytes, source) => {
-        if (source === 'response' || (terminal.focused && this.status === 'running'))
-          this.pty?.write(bytes)
-      },
+      onData: (bytes, source) => this.handlers.onData(this.definition.name, run, bytes, source),
       onTerminalResize: (columns, rows) =>
-        this.pty?.resize(Math.max(1, columns), Math.max(1, rows)),
+        this.handlers.onResize(this.definition.name, Math.max(1, columns), Math.max(1, rows)),
     })
-    return terminal
   }
 }
