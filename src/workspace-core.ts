@@ -93,6 +93,7 @@ export interface CleanupFailure {
   readonly operation: string
   readonly processGroupId?: number | undefined
   readonly priorExitCode?: number | undefined
+  readonly priorRuntimeOperation?: string | undefined
 }
 
 export class WorkspaceShutdownError extends Data.TaggedError('WorkspaceShutdownError')<{
@@ -499,6 +500,7 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
             operation: cleanup.failure.operation,
             processGroupId: cleanup.failure.processGroupId,
             priorExitCode,
+            priorRuntimeOperation,
           })
           yield* setPaneLifecycle(
             name,

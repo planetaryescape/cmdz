@@ -33,6 +33,7 @@ function startPty(
 ) {
   return Effect.gen(function* () {
     const drained = Promise.withResolvers<void>()
+    const initialSize = normalizeTerminalSize(request.size.columns, request.size.rows)
     const child = yield* Effect.try({
       try: () =>
         Bun.spawn([...request.command], {
@@ -40,8 +41,8 @@ function startPty(
           cwd: request.cwd,
           env: { ...request.env, TERM: 'xterm-256color' },
           terminal: {
-            cols: request.size.columns,
-            rows: request.size.rows,
+            cols: initialSize.columns,
+            rows: initialSize.rows,
             data: (_terminal, bytes) => request.output(bytes),
             exit: () => drained.resolve(),
           },
