@@ -17,7 +17,8 @@ import { TerminalPane } from './terminal-pane'
 
 function isActive(lifecycle: PaneLifecycle) {
   return (
-    lifecycle._tag === 'Starting' || lifecycle._tag === 'Running' || lifecycle._tag === 'Stopping'
+    lifecycle._tag !== 'Ready' &&
+    (lifecycle._tag !== 'Cleaning' || lifecycle.cleanup._tag !== 'Failed')
   )
 }
 

@@ -6,6 +6,7 @@ import { makeRecordingProcessDriver } from './testing/fake-process-driver'
 import {
   createWorkspaceController,
   type PaneSnapshot,
+  renderStatus,
   WorkspaceShutdownError,
   type WorkspaceEvent,
   type WorkspaceSnapshot,
@@ -31,7 +32,7 @@ function pane(snapshot: WorkspaceSnapshot, name: string): PaneSnapshot {
 
 function runOf(snapshot: WorkspaceSnapshot, name: string) {
   const lifecycle = pane(snapshot, name).lifecycle
-  return lifecycle._tag === 'Idle' ? lifecycle.lastRun : lifecycle.run
+  return lifecycle._tag === 'Ready' ? lifecycle.lastRun : lifecycle.run
 }
 
 const awaitLifecycle = (
@@ -41,6 +42,20 @@ const awaitLifecycle = (
 ) =>
   controller.snapshots.pipe(
     Stream.filter((snapshot) => pane(snapshot, name).lifecycle._tag === tag),
+    Stream.take(1),
+    Stream.runDrain,
+  )
+
+const awaitOutcome = (
+  controller: { readonly snapshots: Stream.Stream<WorkspaceSnapshot> },
+  name: string,
+  tag: Extract<PaneSnapshot['lifecycle'], { readonly _tag: 'Ready' }>['outcome']['_tag'],
+) =>
+  controller.snapshots.pipe(
+    Stream.filter((snapshot) => {
+      const lifecycle = pane(snapshot, name).lifecycle
+      return lifecycle._tag === 'Ready' && lifecycle.outcome._tag === tag
+    }),
     Stream.take(1),
     Stream.runDrain,
   )
@@ -55,8 +70,8 @@ test('covers successful and manually stopped lifecycle transitions', async () =>
       yield* controller.initialize({ Web: size })
 
       const successfulTransitions = yield* controller.snapshots.pipe(
-        Stream.map((snapshot) => pane(snapshot, 'Web').lifecycle._tag),
-        Stream.take(4),
+        Stream.map((snapshot) => renderStatus(pane(snapshot, 'Web').lifecycle)),
+        Stream.take(5),
         Stream.runCollect,
         Effect.forkScoped,
       )
@@ -69,28 +84,26 @@ test('covers successful and manually stopped lifecycle transitions', async () =>
       yield* startGate.release
       yield* Fiber.join(start)
       yield* driver.process('Web', 1).exit(0)
-      const succeeded = yield* awaitLifecycle(controller, 'Web', 'Succeeded').pipe(
-        Effect.forkScoped,
-      )
+      const succeeded = yield* awaitOutcome(controller, 'Web', 'Succeeded').pipe(Effect.forkScoped)
       yield* Fiber.join(succeeded)
 
       const cleanupGate = yield* driver.gateCleanup('Web', 2)
       yield* controller.dispatch({ type: 'start', name: 'Web', size })
       const stop = yield* controller.dispatch({ type: 'stop', name: 'Web' }).pipe(Effect.forkScoped)
       yield* cleanupGate.reached
-      expect(pane(yield* controller.snapshot, 'Web').lifecycle._tag).toBe('Stopping')
+      expect(pane(yield* controller.snapshot, 'Web').lifecycle._tag).toBe('Cleaning')
       yield* cleanupGate.release
       const stopped = yield* Fiber.join(stop)
 
       return {
-        stopped: pane(stopped, 'Web').lifecycle._tag,
+        stopped: renderStatus(pane(stopped, 'Web').lifecycle),
         successful: Array.from(yield* Fiber.join(successfulTransitions)),
       }
     }).pipe(Effect.scoped),
   )
 
-  expect(transitions.successful).toEqual(['Idle', 'Starting', 'Running', 'Succeeded'])
-  expect(transitions.stopped).toBe('Stopped')
+  expect(transitions.successful).toEqual(['idle', 'starting', 'running', 'stopping', 'succeeded'])
+  expect(transitions.stopped).toBe('stopped')
 })
 
 test('allows cleanup retry after an interrupted gated stop', async () => {
@@ -109,7 +122,7 @@ test('allows cleanup retry after an interrupted gated stop', async () => {
         .pipe(Effect.forkScoped)
       yield* interruptedGate.reached
       yield* Fiber.interrupt(interruptedStop)
-      expect(pane(yield* controller.snapshot, 'Web').lifecycle._tag).toBe('Stopping')
+      expect(pane(yield* controller.snapshot, 'Web').lifecycle._tag).toBe('Cleaning')
 
       const retryGate = yield* driver.gateCleanup('Web', 1)
       const retry = yield* controller
@@ -123,9 +136,73 @@ test('allows cleanup retry after an interrupted gated stop', async () => {
     }).pipe(Effect.scoped),
   )
 
-  expect(pane(result.stopped, 'Web').lifecycle._tag).toBe('Stopped')
+  expect(renderStatus(pane(result.stopped, 'Web').lifecycle)).toBe('stopped')
   expect(result.cleanupAttempts).toBe(1)
   expect(result.active).toBe(false)
+})
+
+test('manual stop overrides an observed exit while cleanup is pending', async () => {
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = makeRecordingProcessDriver()
+      const controller = yield* createWorkspaceController([definition('Web')]).pipe(
+        Effect.provide(driver.layer),
+      )
+      yield* controller.initialize({ Web: size })
+      yield* controller.dispatch({ type: 'start', name: 'Web', size })
+
+      const cleanupGate = yield* driver.gateCleanup('Web', 1)
+      yield* driver.process('Web', 1).exit(23)
+      yield* cleanupGate.reached
+      const stop = yield* controller.dispatch({ type: 'stop', name: 'Web' }).pipe(Effect.forkScoped)
+      const retargeted = yield* controller.snapshots.pipe(
+        Stream.filter((snapshot) => {
+          const lifecycle = pane(snapshot, 'Web').lifecycle
+          return lifecycle._tag === 'Cleaning' && lifecycle.target._tag === 'Stopped'
+        }),
+        Stream.take(1),
+        Stream.runDrain,
+        Effect.forkScoped,
+      )
+      yield* Fiber.join(retargeted)
+      yield* cleanupGate.release
+      yield* Fiber.join(stop)
+      return yield* controller.snapshot
+    }).pipe(Effect.scoped),
+  )
+
+  expect(pane(result, 'Web').lifecycle).toEqual({
+    _tag: 'Ready',
+    lastRun: 1,
+    outcome: { _tag: 'Stopped' },
+  })
+})
+
+test('shutdown preserves an observed process outcome while cleanup is pending', async () => {
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = makeRecordingProcessDriver()
+      const controller = yield* createWorkspaceController([definition('Web')]).pipe(
+        Effect.provide(driver.layer),
+      )
+      yield* controller.initialize({ Web: size })
+      yield* controller.dispatch({ type: 'start', name: 'Web', size })
+
+      const cleanupGate = yield* driver.gateCleanup('Web', 1)
+      yield* driver.process('Web', 1).exit(23)
+      yield* cleanupGate.reached
+      const shutdown = yield* controller.shutdown.pipe(Effect.forkScoped)
+      yield* cleanupGate.release
+      yield* Fiber.join(shutdown)
+      return yield* controller.snapshot
+    }).pipe(Effect.scoped),
+  )
+
+  expect(pane(result, 'Web').lifecycle).toEqual({
+    _tag: 'Ready',
+    lastRun: 1,
+    outcome: { _tag: 'Exited', exitCode: 23 },
+  })
 })
 
 test('drives typed lifecycle, opaque output, input, and resize through one controller', async () => {
@@ -174,9 +251,9 @@ test('drives typed lifecycle, opaque output, input, and resize through one contr
   expect(result.process.input).toEqual([result.input])
   expect(result.process.sizes.at(-1)).toEqual({ columns: 132, rows: 43 })
   expect(pane(result.snapshot, 'Web').lifecycle).toEqual({
-    _tag: 'Succeeded',
-    run: 1,
-    exitCode: 0,
+    _tag: 'Ready',
+    lastRun: 1,
+    outcome: { _tag: 'Succeeded', exitCode: 0 },
   })
   expect(result.snapshot.mode).toBe('navigation')
 })
@@ -326,22 +403,27 @@ test('classifies start, runtime, nonzero exit, manual stop, and unresolved clean
   )
 
   expect(pane(result.snapshot, 'Start').lifecycle).toMatchObject({
-    _tag: 'Failed',
-    failure: { _tag: 'StartFailed', operation: 'spawn' },
+    _tag: 'Ready',
+    outcome: { _tag: 'StartFailed', operation: 'spawn' },
   })
   expect(pane(result.snapshot, 'Runtime').lifecycle).toMatchObject({
-    _tag: 'Failed',
-    failure: { _tag: 'RuntimeFailed', operation: 'read' },
+    _tag: 'Ready',
+    outcome: { _tag: 'RuntimeFailed', operation: 'read' },
   })
   expect(pane(result.snapshot, 'Exit').lifecycle).toMatchObject({
-    _tag: 'Failed',
-    failure: { _tag: 'Exited', exitCode: 17 },
+    _tag: 'Ready',
+    outcome: { _tag: 'Exited', exitCode: 17 },
   })
-  expect(pane(result.snapshot, 'Stop').lifecycle._tag).toBe('Stopped')
+  expect(pane(result.snapshot, 'Stop').lifecycle).toMatchObject({
+    _tag: 'Ready',
+    outcome: { _tag: 'Stopped' },
+  })
   expect(pane(result.snapshot, 'Cleanup').lifecycle).toMatchObject({
-    _tag: 'Failed',
-    failure: { _tag: 'CleanupFailed', processGroupId: 1 },
+    _tag: 'Cleaning',
+    target: { _tag: 'Stopped' },
+    cleanup: { _tag: 'Failed', processGroupId: 1 },
   })
+  expect('process' in pane(result.snapshot, 'Cleanup').lifecycle).toBe(false)
   expect(result.restart._tag).toBe('Failure')
 })
 
@@ -372,7 +454,11 @@ test('initializes autostart once, keeps optional panes idle, and resizes every a
     }).pipe(Effect.scoped),
   )
 
-  expect(pane(result.initialized, 'Optional').lifecycle).toEqual({ _tag: 'Idle', lastRun: 0 })
+  expect(pane(result.initialized, 'Optional').lifecycle).toEqual({
+    _tag: 'Ready',
+    lastRun: 0,
+    outcome: { _tag: 'Idle' },
+  })
   expect(result.driver.process('Web', 1).sizes.at(-1)).toEqual({ columns: 100, rows: 30 })
   expect(result.driver.process('Worker', 1).sizes.at(-1)).toEqual({ columns: 78, rows: 20 })
   expect(result.driver.runs.has('Optional:1')).toBe(false)
@@ -383,23 +469,31 @@ test('restores every prior terminal outcome when shutdown retries cleanup', asyn
   const outcomes = [
     {
       kind: 'success',
-      expected: { _tag: 'Succeeded', run: 1, exitCode: 0 },
+      expected: {
+        _tag: 'Ready',
+        lastRun: 1,
+        outcome: { _tag: 'Succeeded', exitCode: 0 },
+      },
     },
     {
       kind: 'exit',
-      expected: { _tag: 'Failed', run: 1, failure: { _tag: 'Exited', exitCode: 23 } },
+      expected: {
+        _tag: 'Ready',
+        lastRun: 1,
+        outcome: { _tag: 'Exited', exitCode: 23 },
+      },
     },
     {
       kind: 'runtime',
       expected: {
-        _tag: 'Failed',
-        run: 1,
-        failure: { _tag: 'RuntimeFailed', operation: 'read' },
+        _tag: 'Ready',
+        lastRun: 1,
+        outcome: { _tag: 'RuntimeFailed', operation: 'read' },
       },
     },
     {
       kind: 'stop',
-      expected: { _tag: 'Stopped', run: 1 },
+      expected: { _tag: 'Ready', lastRun: 1, outcome: { _tag: 'Stopped' } },
     },
   ] as const
 
@@ -417,7 +511,13 @@ test('restores every prior terminal outcome when shutdown retries cleanup', asyn
         if (outcome.kind === 'stop') {
           yield* controller.dispatch({ type: 'stop', name: 'Web' })
         } else {
-          const cleanupFailed = yield* awaitLifecycle(controller, 'Web', 'Failed').pipe(
+          const cleanupFailed = yield* controller.snapshots.pipe(
+            Stream.filter((snapshot) => {
+              const lifecycle = pane(snapshot, 'Web').lifecycle
+              return lifecycle._tag === 'Cleaning' && lifecycle.cleanup._tag === 'Failed'
+            }),
+            Stream.take(1),
+            Stream.runDrain,
             Effect.forkScoped,
           )
           if (outcome.kind === 'runtime') yield* driver.process('Web', 1).fail('read')
@@ -427,8 +527,8 @@ test('restores every prior terminal outcome when shutdown retries cleanup', asyn
 
         const failed = pane(yield* controller.snapshot, 'Web').lifecycle
         expect(failed).toMatchObject({
-          _tag: 'Failed',
-          failure: { _tag: 'CleanupFailed' },
+          _tag: 'Cleaning',
+          cleanup: { _tag: 'Failed' },
         })
         yield* controller.shutdown
         const lifecycle: PaneSnapshot['lifecycle'] = pane(
@@ -469,12 +569,18 @@ test('retries failed pane cleanup during shutdown and still cleans every peer', 
     }).pipe(Effect.scoped),
   )
 
-  expect(pane(result.stopped, 'Web').lifecycle._tag).toBe('Failed')
+  expect(pane(result.stopped, 'Web').lifecycle).toMatchObject({
+    _tag: 'Cleaning',
+    cleanup: { _tag: 'Failed' },
+  })
   expect(result.driver.process('Web', 1).cleanupAttempts).toBe(2)
   expect(result.driver.process('Worker', 1).cleanupAttempts).toBe(1)
   expect(result.driver.runs.has('Optional:1')).toBe(false)
   expect(result.snapshot.shuttingDown).toBe(true)
-  expect(pane(result.snapshot, 'Web').lifecycle._tag).toBe('Stopped')
+  expect(pane(result.snapshot, 'Web').lifecycle).toMatchObject({
+    _tag: 'Ready',
+    outcome: { _tag: 'Stopped' },
+  })
   expect(Array.from(result.driver.runs.values()).every((process) => !process.active)).toBe(true)
 })
 
@@ -498,7 +604,13 @@ test('aggregates unresolved cleanup after attempting every pane and memoizes shu
 
   expect(result.first).toBeInstanceOf(WorkspaceShutdownError)
   expect(result.first.failures).toEqual([
-    { name: 'Web', run: 1, operation: 'signal', processGroupId: 1, priorExitCode: 23 },
+    {
+      name: 'Web',
+      run: 1,
+      operation: 'signal',
+      processGroupId: 1,
+      target: { _tag: 'Exited', exitCode: 23 },
+    },
   ])
   expect(result.second).toBe(result.first)
   expect(result.driver.process('Web', 1).cleanupAttempts).toBe(2)

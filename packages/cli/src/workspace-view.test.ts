@@ -30,6 +30,10 @@ test('starts, focuses, resizes, stops, and restarts one real command', async () 
     }
     throw new Error(`Missing ${text}:\n${ui.captureCharFrame()}`)
   }
+  const captureEvidence = async (name: string) => {
+    const directory = process.env.CMDZ_E2E_EVIDENCE
+    if (directory) await Bun.write(`${directory}/${name}.txt`, ui.captureCharFrame())
+  }
   try {
     await waitForText('Demo [idle]')
     ui.mockInput.pressEnter()
@@ -45,6 +49,7 @@ test('starts, focuses, resizes, stops, and restarts one real command', async () 
     await ui.mockInput.typeText('size')
     ui.mockInput.pressEnter()
     await waitForText('size:78x28')
+    await captureEvidence('real-pty-running')
     ui.mockInput.pressKey('z', { ctrl: true })
     await waitForText('NAVIGATION')
     ui.mockInput.pressKey('x')
@@ -58,6 +63,7 @@ test('starts, focuses, resizes, stops, and restarts one real command', async () 
     await ui.mockInput.typeText('exit')
     ui.mockInput.pressEnter()
     await waitForText('Demo [succeeded]')
+    await captureEvidence('real-pty-succeeded')
     ui.mockInput.pressKey('q')
     const exit = await running
     expect(exit._tag).toBe('Success')

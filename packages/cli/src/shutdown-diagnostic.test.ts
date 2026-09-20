@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 
-import { WorkspaceShutdownError } from '@cmdz/core/workspace'
+import { PaneOutcome, WorkspaceShutdownError } from '@cmdz/core/workspace'
 
 import { formatShutdownDiagnostic } from './shutdown-diagnostic'
 
@@ -8,8 +8,14 @@ test('reports every unresolved process group without process data', () => {
   const diagnostic = formatShutdownDiagnostic(
     new WorkspaceShutdownError({
       failures: [
-        { name: 'Web', run: 3, operation: 'signal-SIGKILL', processGroupId: 4312 },
-        { name: 'Worker', run: 2, operation: 'drain' },
+        {
+          name: 'Web',
+          run: 3,
+          operation: 'signal-SIGKILL',
+          processGroupId: 4312,
+          target: PaneOutcome.Stopped(),
+        },
+        { name: 'Worker', run: 2, operation: 'drain', target: PaneOutcome.Stopped() },
       ],
     }),
   )
