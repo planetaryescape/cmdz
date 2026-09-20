@@ -99,9 +99,10 @@ export function makeRecordingProcessDriver(): RecordingProcessDriver {
           if (cleaned) return
           const cleanupGate = cleanupGates.get(key)
           if (cleanupGate) {
-            yield* cleanupGate.onReach
-            yield* cleanupGate.awaitRelease
-            cleanupGates.delete(key)
+            yield* cleanupGate.onReach.pipe(
+              Effect.andThen(cleanupGate.awaitRelease),
+              Effect.ensuring(Effect.sync(() => cleanupGates.delete(key))),
+            )
           }
           recorded.cleanupAttempts++
           const failures = cleanupFailures.get(key) ?? 0

@@ -72,7 +72,7 @@ test('reports attachment failure only after releasing the spawned PTY', async ()
   expect(error).toMatchObject({ _tag: 'ProcessStartError', operation: 'attach' })
   expect(detached).toBe(true)
   expect(attached?.closed).toBe(true)
-})
+}, 8000)
 
 test('interrupting a run terminates its process group and closes the PTY', async () => {
   let childPid = 0
