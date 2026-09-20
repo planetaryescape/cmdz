@@ -3,17 +3,17 @@ import { expect, test } from 'bun:test'
 import { createTestRenderer } from '@opentui/core/testing'
 import { Effect } from 'effect'
 
-import { processWorkspace } from './process-workspace'
+import { runWorkspace } from './workspace-session'
 
 test('starts, focuses, resizes, stops, and restarts one real command', async () => {
   const ui = await createTestRenderer({ width: 80, height: 24, kittyKeyboard: false })
   const controller = new AbortController()
   const running = Effect.runPromiseExit(
-    processWorkspace(ui.renderer, [
+    runWorkspace(ui.renderer, [
       {
         name: 'Demo',
         title: 'Demo',
-        command: 'bun run src/demo-command.ts',
+        command: `bun run ${import.meta.dir}/demo-command.ts`,
         cwd: process.cwd(),
         env: {},
         autostart: false,

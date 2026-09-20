@@ -2,6 +2,7 @@ import { stat } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
+import type { WorkspaceDefinition } from '@cmdz/core/workspace-definition'
 import { Effect, Schema, flow } from 'effect'
 
 const Definition = Schema.Struct({
@@ -17,15 +18,6 @@ export class ConfigError extends Schema.TaggedError<ConfigError>()('ConfigError'
   message: Schema.String,
 }) {}
 
-export interface ProcessDefinition {
-  readonly name: string
-  readonly command: string
-  readonly cwd: string
-  readonly title: string
-  readonly env: Readonly<Record<string, string>>
-  readonly autostart: boolean
-}
-
 const resolveConfig = Effect.fn('config.validate')(function* (
   definitions: readonly (typeof Definition.Type)[],
   directory: string,
@@ -33,7 +25,7 @@ const resolveConfig = Effect.fn('config.validate')(function* (
   if (definitions.length === 0)
     return yield* Effect.fail(new ConfigError({ message: 'Define at least one command.' }))
   const names = new Set<string>()
-  const result: ProcessDefinition[] = []
+  const result: WorkspaceDefinition[] = []
   for (const definition of definitions) {
     if (!definition.name.trim() || !definition.command.trim() || definition.title?.trim() === '') {
       return yield* Effect.fail(

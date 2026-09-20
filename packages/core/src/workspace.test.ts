@@ -2,7 +2,6 @@ import { expect, test } from 'bun:test'
 
 import { Effect, Fiber, Stream } from 'effect'
 
-import type { ProcessDefinition } from './config'
 import { makeRecordingProcessDriver } from './testing/fake-process-driver'
 import {
   createWorkspaceController,
@@ -10,9 +9,10 @@ import {
   WorkspaceShutdownError,
   type WorkspaceEvent,
   type WorkspaceSnapshot,
-} from './workspace-core'
+} from './workspace'
+import type { WorkspaceDefinition } from './workspace-definition'
 
-const definition = (name: string, autostart = false): ProcessDefinition => ({
+const definition = (name: string, autostart = false): WorkspaceDefinition => ({
   name,
   title: name,
   command: name.toLowerCase(),

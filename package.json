@@ -2,22 +2,19 @@
   "name": "cmdz",
   "private": true,
   "type": "module",
-  "exports": "./src/command.ts",
+  "exports": "./packages/cli/src/command.ts",
   "packageManager": "bun@1.4.0",
+  "workspaces": ["packages/*"],
   "scripts": {
-    "dev": "bun run src/main.ts",
-    "build:binary": "bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig src/main.ts --outfile dist/cmdz && ([ \"$(uname -s)\" != Darwin ] || codesign --force --sign - dist/cmdz)",
+    "dev": "bun run packages/cli/src/main.ts",
+    "build:binary": "bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig packages/cli/src/main.ts --outfile dist/cmdz && ([ \"$(uname -s)\" != Darwin ] || codesign --force --sign - dist/cmdz)",
     "test:binary": "bun run build:binary && python3 scripts/standalone-smoke.py dist/cmdz",
-    "test": "bun test",
+    "test": "bun --filter=@cmdz/core run test && bun --filter=@cmdz/tui run test && bun --filter=@cmdz/cli run test",
     "typecheck": "tsgo --noEmit",
     "lint": "oxlint --deny-warnings",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "check": "bun run typecheck && bun run lint && bun run format:check && bun run test"
-  },
-  "dependencies": {
-    "@opentui/core": "0.5.10",
-    "effect": "4.0.0-rc.112"
   },
   "devDependencies": {
     "@oxlint/plugins": "1.81.0",

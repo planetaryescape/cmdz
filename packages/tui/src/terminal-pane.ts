@@ -1,7 +1,6 @@
+import { normalizeTerminalSize } from '@cmdz/core/process-driver'
+import type { WorkspaceDefinition } from '@cmdz/core/workspace-definition'
 import { EmbeddedTerminalRenderable, type CliRenderer } from '@opentui/core'
-
-import type { ProcessDefinition } from './config'
-import { normalizeTerminalSize } from './process-driver'
 
 interface ProcessPaneHandlers {
   readonly onData: (
@@ -13,12 +12,12 @@ interface ProcessPaneHandlers {
   readonly onResize: (name: string, columns: number, rows: number) => void
 }
 
-export class ProcessPane {
+export class TerminalPane {
   terminal: EmbeddedTerminalRenderable
   run = 0
 
   constructor(
-    readonly definition: ProcessDefinition,
+    readonly definition: WorkspaceDefinition,
     private readonly renderer: CliRenderer,
     readonly index: number,
     private readonly handlers: ProcessPaneHandlers,

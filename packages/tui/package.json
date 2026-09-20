@@ -1,0 +1,17 @@
+{
+  "name": "@cmdz/tui",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./workspace-view": "./src/workspace-view.ts"
+  },
+  "scripts": {
+    "test": "bun test src",
+    "typecheck": "tsgo --noEmit"
+  },
+  "dependencies": {
+    "@cmdz/core": "workspace:*",
+    "@opentui/core": "0.5.10",
+    "effect": "4.0.0-rc.112"
+  }
+}

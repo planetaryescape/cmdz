@@ -3,13 +3,13 @@ import { expect, test } from 'bun:test'
 import { createTestRenderer } from '@opentui/core/testing'
 import { Effect } from 'effect'
 
-import { processWorkspace } from './process-workspace'
+import { runWorkspace } from './workspace-session'
 
 test('autostarts configured commands and isolates optional panes and input', async () => {
   const ui = await createTestRenderer({ width: 100, height: 30, kittyKeyboard: false })
   const controller = new AbortController()
   const running = Effect.runPromiseExit(
-    processWorkspace(ui.renderer, [
+    runWorkspace(ui.renderer, [
       {
         name: 'First',
         title: 'First',

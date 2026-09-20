@@ -92,9 +92,9 @@ All generic anti-slop rules and its Effect rule are enabled. See [lint provenanc
 
 ## Terminal session
 
-`src/terminal-session.ts` acquires the renderer as an Effect scoped resource and removes input listeners before destroying it. `src/main.ts` translates OS termination signals into Effect interruption. Renderer initialization errors and non-interactive terminals fail visibly.
+`packages/cli/src/terminal-session.ts` acquires the renderer as an Effect scoped resource and removes input listeners before destroying it. `packages/cli/src/main.ts` translates OS termination signals into Effect interruption. Renderer initialization errors and non-interactive terminals fail visibly.
 
-`src/workspace-core.ts` is the headless source of truth for command lifecycle, run generations, selection, input mode, sidebar state, and shutdown. It coordinates processes through the contract in `src/process-driver.ts`. `src/process-workspace.ts` translates OpenTUI input into controller commands and renders snapshots and ordered output events. `src/process-pane.ts` owns only each embedded terminal renderable. `src/pty-process.ts` implements the production process driver with Bun PTYs and POSIX process groups. OpenTUI's built-in `EmbeddedTerminalRenderable` handles ANSI parsing, input encoding, and terminal resizing. No PTY or parser dependency was added.
+`@cmdz/core` is the headless source of truth for command lifecycle, run generations, selection, input mode, sidebar state, and shutdown. `@cmdz/tui` translates OpenTUI input into controller commands and renders snapshots and ordered output events. `@cmdz/cli` implements the production process driver with Bun PTYs and POSIX process groups, and composes the runtime. OpenTUI's built-in `EmbeddedTerminalRenderable` handles ANSI parsing, input encoding, and terminal resizing. No PTY or parser dependency was added. See [workspace architecture](docs/monorepo-architecture.md).
 
 On release, signal the owned process group, wait up to three seconds for the leader, then force-kill remaining group members. Drain pending PTY output with a bounded wait before closing it. Deliberately detached descendants are outside this process-group ownership model.
 

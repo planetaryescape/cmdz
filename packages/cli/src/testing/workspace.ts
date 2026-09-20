@@ -1,10 +1,10 @@
+import type { WorkspaceDefinition } from '@cmdz/core/workspace-definition'
 import { createTestRenderer } from '@opentui/core/testing'
 import { Effect } from 'effect'
 
-import type { ProcessDefinition } from '../config'
-import { processWorkspace } from '../process-workspace'
+import { runWorkspace } from '../workspace-session'
 
-export async function createWorkspace(definitions: readonly ProcessDefinition[]) {
+export async function createWorkspace(definitions: readonly WorkspaceDefinition[]) {
   const ui = await createTestRenderer({
     width: 100,
     height: 30,
@@ -13,7 +13,7 @@ export async function createWorkspace(definitions: readonly ProcessDefinition[])
     exitSignals: [],
   })
   const controller = new AbortController()
-  const running = Effect.runPromiseExit(processWorkspace(ui.renderer, definitions), {
+  const running = Effect.runPromiseExit(runWorkspace(ui.renderer, definitions), {
     signal: controller.signal,
   })
   return {
@@ -36,10 +36,10 @@ export async function createWorkspace(definitions: readonly ProcessDefinition[])
   }
 }
 
-export const probe: ProcessDefinition = {
+export const probe: WorkspaceDefinition = {
   name: 'Probe',
   title: 'Probe',
-  command: 'bun run src/testing/input-probe.ts',
+  command: `bun run ${import.meta.dir}/input-probe.ts`,
   cwd: process.cwd(),
   env: {},
   autostart: true,

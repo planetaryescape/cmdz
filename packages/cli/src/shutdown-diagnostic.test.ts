@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test'
 
+import { WorkspaceShutdownError } from '@cmdz/core/workspace'
+
 import { formatShutdownDiagnostic } from './shutdown-diagnostic'
-import { WorkspaceShutdownError } from './workspace-core'
 
 test('reports every unresolved process group without process data', () => {
   const diagnostic = formatShutdownDiagnostic(

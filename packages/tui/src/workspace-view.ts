@@ -1,24 +1,19 @@
-import { BoxRenderable, TextRenderable, type CliRenderer, type KeyEvent } from '@opentui/core'
-import { Effect, Queue, Stream } from 'effect'
-
-import type { ProcessDefinition } from './config'
-import { normalizeTerminalSize, type TerminalSize } from './process-driver'
-import { ProcessPane } from './process-pane'
-import { ptyProcessDriverLayer } from './pty-process'
-import { createShortcutHelp } from './shortcut-help'
+import { normalizeTerminalSize, type TerminalSize } from '@cmdz/core/process-driver'
 import {
-  createWorkspaceController,
   renderStatus,
   type PaneLifecycle,
   type WorkspaceCommand,
   type WorkspaceController,
   type WorkspaceEvent,
   type WorkspaceSnapshot,
-} from './workspace-core'
+} from '@cmdz/core/workspace'
+import type { WorkspaceDefinition } from '@cmdz/core/workspace-definition'
+import { createWorkspaceRuntime } from '@cmdz/core/workspace-runtime'
+import { BoxRenderable, TextRenderable, type CliRenderer, type KeyEvent } from '@opentui/core'
+import { Effect, Queue, Stream } from 'effect'
 
-type UiAction =
-  | { readonly type: 'quit' }
-  | { readonly type: 'command'; readonly command: WorkspaceCommand }
+import { createShortcutHelp } from './shortcut-help'
+import { TerminalPane } from './terminal-pane'
 
 function isActive(lifecycle: PaneLifecycle) {
   return (
@@ -26,11 +21,17 @@ function isActive(lifecycle: PaneLifecycle) {
   )
 }
 
-export const renderProcessWorkspace = Effect.fn('process.workspace')(function* (
+type UiAction =
+  | { readonly type: 'quit' }
+  | { readonly type: 'command'; readonly command: WorkspaceCommand }
+
+/** Renders workspace state and translates OpenTUI events to framework-independent commands. */
+export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* (
   renderer: CliRenderer,
-  definitions: readonly ProcessDefinition[],
+  definitions: readonly WorkspaceDefinition[],
   controller: WorkspaceController,
 ) {
+  const runtime = yield* createWorkspaceRuntime(controller)
   const actions = yield* Queue.unbounded<UiAction>()
   const header = new TextRenderable(renderer, { id: 'status', height: 1 })
   const footer = new TextRenderable(renderer, { id: 'help', height: 1 })
@@ -49,7 +50,7 @@ export const renderProcessWorkspace = Effect.fn('process.workspace')(function* (
     Queue.offerUnsafe(actions, { type: 'command', command })
   const panes = definitions.map(
     (definition, index) =>
-      new ProcessPane(definition, renderer, index, {
+      new TerminalPane(definition, renderer, index, {
         onData: (name, run, bytes, source) =>
           offer({
             type: 'write',
@@ -108,7 +109,7 @@ export const renderProcessWorkspace = Effect.fn('process.workspace')(function* (
     selectedPane()?.terminal.blur()
     offer({ type: 'leaveInput' })
   }
-  const bindTerminal = (pane: ProcessPane) => {
+  const bindTerminal = (pane: TerminalPane) => {
     pane.terminal.on('focused', () => {
       const state = snapshot.panes.find((candidate) => candidate.name === pane.definition.name)
       if (
@@ -210,14 +211,13 @@ export const renderProcessWorkspace = Effect.fn('process.workspace')(function* (
 
   const initialSizes: Record<string, TerminalSize> = {}
   for (const pane of panes) initialSizes[pane.definition.name] = pane.size()
-  yield* controller.initialize(initialSizes)
+  yield* runtime.initialize(initialSizes)
   yield* Effect.logInfo('Process workspace ready')
-
   const run = Effect.gen(function* () {
     while (true) {
       const action = yield* Queue.take(actions)
       if (action.type === 'quit') return
-      yield* controller.dispatch(action.command).pipe(
+      yield* runtime.dispatch(action.command).pipe(
         Effect.catch((error) =>
           Effect.logWarning('Workspace command rejected').pipe(
             Effect.annotateLogs({
@@ -229,14 +229,5 @@ export const renderProcessWorkspace = Effect.fn('process.workspace')(function* (
       )
     }
   })
-  yield* run.pipe(Effect.onExit(() => controller.shutdown))
+  yield* run.pipe(Effect.onExit(() => runtime.shutdown))
 }, Effect.scoped)
-
-export const processWorkspace = (
-  renderer: CliRenderer,
-  definitions: readonly ProcessDefinition[],
-) =>
-  Effect.gen(function* () {
-    const controller = yield* createWorkspaceController(definitions)
-    yield* renderProcessWorkspace(renderer, definitions, controller)
-  }).pipe(Effect.scoped, Effect.provide(ptyProcessDriverLayer))
