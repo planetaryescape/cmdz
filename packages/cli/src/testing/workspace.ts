@@ -16,26 +16,24 @@ export async function createWorkspace(definitions: readonly WorkspaceDefinition[
   const running = Effect.runPromiseExit(runWorkspace(ui.renderer, definitions), {
     signal: controller.signal,
   })
+  const waitForFrame = async (text: string, present: boolean) => {
+    const deadline = performance.now() + 5000
+    while (performance.now() < deadline) {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      await ui.renderOnce()
+      if (ui.captureCharFrame().includes(text) === present) return
+    }
+    const diagnostic = present ? `Missing ${text}` : `Still found ${text}`
+    throw new Error(`${diagnostic}:\n${ui.captureCharFrame()}`)
+  }
   return {
     ...ui,
     running,
     async waitFor(text: string) {
-      const deadline = performance.now() + 5000
-      while (performance.now() < deadline) {
-        await new Promise<void>((resolve) => setImmediate(resolve))
-        await ui.renderOnce()
-        if (ui.captureCharFrame().includes(text)) return
-      }
-      throw new Error(`Missing ${text}:\n${ui.captureCharFrame()}`)
+      await waitForFrame(text, true)
     },
     async waitForMissing(text: string) {
-      const deadline = performance.now() + 5000
-      while (performance.now() < deadline) {
-        await new Promise<void>((resolve) => setImmediate(resolve))
-        await ui.renderOnce()
-        if (!ui.captureCharFrame().includes(text)) return
-      }
-      throw new Error(`Still found ${text}:\n${ui.captureCharFrame()}`)
+      await waitForFrame(text, false)
     },
     async close() {
       controller.abort()

@@ -15,6 +15,7 @@ test('help consumes keys, paste, and mouse input until dismissed', async () => {
     await ui.waitFor('cmdz shortcuts')
     ui.mockInput.pressEscape()
     await ui.waitFor('Probe · cmdz.ts')
+    await ui.waitFor('RUNNING')
     expect(ui.captureCharFrame()).not.toContain('cmdz shortcuts')
     expect(ui.captureCharFrame()).toContain('Probe · cmdz.ts')
     ui.mockInput.pressEnter()
@@ -26,6 +27,7 @@ test('help consumes keys, paste, and mouse input until dismissed', async () => {
     await ui.waitFor('cmdz shortcuts')
     ui.mockInput.pressKey('?')
     await ui.waitFor('Probe · cmdz.ts')
+    await ui.waitFor('RUNNING')
     expect(ui.captureCharFrame()).not.toContain('cmdz shortcuts')
   } finally {
     await ui.close()

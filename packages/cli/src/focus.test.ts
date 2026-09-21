@@ -34,7 +34,7 @@ test('clicking an inactive terminal cannot enter input mode', async () => {
   try {
     await ui.waitFor('Enter start')
     await ui.mockMouse.click(30, 3)
-    expect(ui.captureCharFrame()).not.toContain('INPUT')
+    await ui.waitForMissing('INPUT')
     ui.mockInput.pressEnter()
     await ui.waitFor('PROBE_READY')
     expect(ui.captureCharFrame()).not.toContain('INPUT')
