@@ -112,7 +112,7 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
     borderColor: theme.border,
     backgroundColor: theme.surface,
   })
-  const body = new BoxRenderable(renderer, { id: 'body', flexGrow: 1, padding: 1 })
+  const body = new BoxRenderable(renderer, { id: 'body', flexGrow: 1 })
   const emptyState = new BoxRenderable(renderer, {
     id: 'empty-state',
     position: 'absolute',
