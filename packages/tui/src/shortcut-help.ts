@@ -65,6 +65,7 @@ export class ShortcutHelp extends BoxRenderable {
     this.backgroundColor = theme.canvas
     this.panel.backgroundColor = theme.surface
     this.panel.borderColor = theme.border
+    this.text.fg = theme.text
     this.panel.width = compact ? '100%' : 68
     this.panel.height = compact ? Math.min(14, this.renderer.terminalHeight) : 19
     this.text.content = compact
