@@ -1,16 +1,14 @@
 import { normalizeTerminalSize, type TerminalSize } from '@cmdz/core/process-driver'
-import {
-  renderStatus,
-  type PaneLifecycle,
-  type WorkspaceCommand,
-  type WorkspaceController,
-  type WorkspaceEvent,
-  type WorkspaceSnapshot,
+import type {
+  PaneLifecycle,
+  WorkspaceCommand,
+  WorkspaceController,
+  WorkspaceEvent,
+  WorkspaceSnapshot,
 } from '@cmdz/core/workspace'
 import type { WorkspaceDefinition } from '@cmdz/core/workspace-definition'
 import { createWorkspaceRuntime } from '@cmdz/core/workspace-runtime'
 import {
-  bg,
   bold,
   BoxRenderable,
   fg,
@@ -30,39 +28,45 @@ type UiAction =
   | { readonly type: 'quit' }
   | { readonly type: 'command'; readonly command: WorkspaceCommand }
 
-interface StatusAppearance {
-  readonly symbol: string
-  readonly color: string
-}
+type PaneSection = 'running' | 'idle' | 'stopped' | 'succeeded' | 'failed'
 
-function statusAppearance(lifecycle: PaneLifecycle, theme: WorkspaceTheme): StatusAppearance {
-  switch (lifecycle._tag) {
-    case 'Starting':
-      return { symbol: '◐', color: theme.pending }
-    case 'Running':
-      return { symbol: '●', color: theme.running }
-    case 'Cleaning':
-      return lifecycle.cleanup._tag === 'Failed'
-        ? { symbol: '!', color: theme.danger }
-        : { symbol: '◐', color: theme.pending }
-    case 'Ready':
-      switch (lifecycle.outcome._tag) {
-        case 'Idle':
-          return { symbol: '○', color: theme.muted }
-        case 'Stopped':
-          return { symbol: '■', color: theme.muted }
-        case 'Succeeded':
-          return { symbol: '✓', color: theme.running }
-        case 'StartFailed':
-        case 'RuntimeFailed':
-        case 'Exited':
-          return { symbol: '!', color: theme.danger }
-      }
+const sections: readonly { readonly key: PaneSection; readonly label: string }[] = [
+  { key: 'running', label: 'RUNNING' },
+  { key: 'idle', label: 'IDLE' },
+  { key: 'stopped', label: 'STOPPED' },
+  { key: 'succeeded', label: 'SUCCEEDED' },
+  { key: 'failed', label: 'FAILED' },
+]
+
+function paneSection(lifecycle: PaneLifecycle): PaneSection {
+  if (lifecycle._tag === 'Starting' || lifecycle._tag === 'Running') return 'running'
+  if (lifecycle._tag === 'Cleaning')
+    return lifecycle.cleanup._tag === 'Failed' ? 'failed' : 'running'
+  switch (lifecycle.outcome._tag) {
+    case 'Idle':
+      return 'idle'
+    case 'Stopped':
+      return 'stopped'
+    case 'Succeeded':
+      return 'succeeded'
+    case 'StartFailed':
+    case 'RuntimeFailed':
+    case 'Exited':
+      return 'failed'
   }
 }
 
-function key(theme: WorkspaceTheme, value: string) {
-  return bold(bg(theme.selected)(fg(theme.text)(` ${value} `)))
+function statusColor(section: PaneSection, theme: WorkspaceTheme) {
+  switch (section) {
+    case 'running':
+    case 'succeeded':
+      return theme.running
+    case 'idle':
+    case 'stopped':
+      return theme.muted
+    case 'failed':
+      return theme.danger
+  }
 }
 
 /** Renders workspace state and translates OpenTUI events to framework-independent commands. */
@@ -74,28 +78,28 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
   const runtime = yield* createWorkspaceRuntime(controller)
   const actions = yield* Queue.unbounded<UiAction>()
   let theme = workspaceTheme(renderer.themeMode)
-  const header = new BoxRenderable(renderer, {
-    id: 'header',
-    height: 1,
+  const frame = new BoxRenderable(renderer, {
+    id: 'workspace-frame',
+    flexGrow: 1,
+    flexDirection: 'column',
+    border: true,
+    borderColor: theme.border,
+    backgroundColor: theme.canvas,
+  })
+  const chrome = new BoxRenderable(renderer, {
+    id: 'chrome',
+    height: 2,
+    flexDirection: 'row',
     paddingX: 1,
+    border: ['bottom'],
+    borderColor: theme.border,
     backgroundColor: theme.surface,
   })
-  const headerText = new TextRenderable(renderer, {
-    id: 'status',
-    width: '100%',
-    height: 1,
-    fg: theme.text,
-    truncate: true,
-  })
-  const footer = new BoxRenderable(renderer, {
-    id: 'footer',
-    height: 1,
-    paddingX: 1,
-    backgroundColor: theme.surface,
-  })
-  const footerText = new TextRenderable(renderer, {
-    id: 'help',
-    width: '100%',
+  const trafficLights = new TextRenderable(renderer, { id: 'traffic-lights', width: 10, height: 1 })
+  const chromeSpacer = new BoxRenderable(renderer, { flexGrow: 1 })
+  const chromeTitle = new TextRenderable(renderer, {
+    id: 'chrome-title',
+    width: 24,
     height: 1,
     fg: theme.muted,
     truncate: true,
@@ -103,20 +107,13 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
   const row = new BoxRenderable(renderer, { id: 'workspace', flexDirection: 'row', flexGrow: 1 })
   const sidebar = new BoxRenderable(renderer, {
     id: 'sidebar',
-    width: 22,
+    width: 27,
     flexDirection: 'column',
     border: ['right'],
     borderColor: theme.border,
     backgroundColor: theme.surface,
   })
-  const sidebarTitle = new TextRenderable(renderer, {
-    id: 'sidebar-title',
-    width: '100%',
-    height: 2,
-    content: t`${fg(theme.muted)(` COMMANDS · ${definitions.length}`)}`,
-    truncate: true,
-  })
-  const body = new BoxRenderable(renderer, { id: 'body', flexGrow: 1 })
+  const body = new BoxRenderable(renderer, { id: 'body', flexGrow: 1, padding: 1 })
   const emptyState = new BoxRenderable(renderer, {
     id: 'empty-state',
     position: 'absolute',
@@ -131,15 +128,15 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
     id: 'empty-state-text',
     fg: theme.muted,
   })
-  header.add(headerText)
-  footer.add(footerText)
-  sidebar.add(sidebarTitle)
-  emptyState.add(emptyStateText)
-  renderer.root.add(header)
-  renderer.root.add(row)
+  chrome.add(trafficLights)
+  chrome.add(chromeSpacer)
+  chrome.add(chromeTitle)
+  frame.add(chrome)
+  frame.add(row)
   row.add(sidebar)
   row.add(body)
-  renderer.root.add(footer)
+  emptyState.add(emptyStateText)
+  renderer.root.add(frame)
   const help = createShortcutHelp(renderer, theme)
   renderer.root.add(help)
 
@@ -169,10 +166,30 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
 
   const selectedPane = () => panesByName.get(snapshot.selected)
   const selectedSnapshot = () => snapshot.panes.find((pane) => pane.name === snapshot.selected)
+  const sectionForPane = (pane: TerminalPane) => {
+    const state = snapshot.panes.find((candidate) => candidate.name === pane.definition.name)
+    return state ? paneSection(state.lifecycle) : 'idle'
+  }
+  const orderedPanes = () =>
+    sections.flatMap(({ key }) => panes.filter((pane) => sectionForPane(pane) === key))
+  const sectionHeaders = new Map(
+    sections.map(({ key, label }) => [
+      key,
+      new TextRenderable(renderer, {
+        id: `section-${key}`,
+        width: '100%',
+        height: 2,
+        paddingLeft: 1,
+        content: label,
+        fg: theme.muted,
+        attributes: 2,
+      }),
+    ]),
+  )
   const sidebarRows = panes.map((pane) => {
     const text = new TextRenderable(renderer, {
       width: '100%',
-      height: 2,
+      height: 1,
       paddingLeft: 1,
       wrapMode: 'none',
       truncate: true,
@@ -180,7 +197,9 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
     const box = new BoxRenderable(renderer, {
       id: `sidebar-${pane.index}`,
       width: '100%',
-      height: 2,
+      height: 3,
+      border: true,
+      borderColor: theme.surface,
       backgroundColor: theme.surface,
       onMouseDown: (event) => {
         if (help.visible || snapshot.mode === 'input') return
@@ -191,79 +210,58 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
       },
     })
     box.add(text)
-    sidebar.add(box)
     return { pane, box, text }
   })
 
   const applyTheme = () => {
-    header.backgroundColor = theme.surface
-    headerText.fg = theme.text
-    footer.backgroundColor = theme.surface
-    footerText.fg = theme.muted
+    renderer.setBackgroundColor(theme.canvas)
+    frame.backgroundColor = theme.canvas
+    frame.borderColor = theme.border
+    chrome.backgroundColor = theme.surface
+    chrome.borderColor = theme.border
+    chromeTitle.fg = theme.muted
     sidebar.backgroundColor = theme.surface
     sidebar.borderColor = theme.border
-    sidebarTitle.content = t`${fg(theme.muted)(` COMMANDS · ${definitions.length}`)}`
     emptyStateText.fg = theme.muted
+    for (const heading of sectionHeaders.values()) heading.fg = theme.muted
     help.refresh(theme)
-  }
-
-  const drawFooter = (input: boolean, cleanupFailed: boolean) => {
-    if (input) {
-      footerText.content =
-        renderer.terminalWidth < 80
-          ? t`${key(theme, '^Z')}${fg(theme.muted)(' Nav  ')}${key(theme, '^C')}${fg(theme.muted)(' Interrupt')}`
-          : t`${key(theme, 'Ctrl-Z')}${fg(theme.muted)(' Navigation  ')}${key(theme, 'Ctrl-C')}${fg(theme.muted)(' Interrupt child')}`
-      return
-    }
-    if (renderer.terminalWidth < 80) {
-      footerText.content = t`${key(theme, 'Enter')}${fg(theme.muted)(' Open  ')}${key(theme, 'h')}${fg(theme.muted)(' Commands  ')}${key(theme, '?')}${fg(theme.muted)(' Help')}`
-      return
-    }
-    footerText.content = cleanupFailed
-      ? t`${key(theme, 'x')}${fg(theme.muted)(' Retry cleanup  ')}${key(theme, 'r')}${fg(theme.muted)(' Retry + restart  ')}${key(theme, '?')}${fg(theme.muted)(' Help')}`
-      : t`${key(theme, '↑↓')}${fg(theme.muted)(' Select  ')}${key(theme, 'Enter')}${fg(theme.muted)(' Open  ')}${key(theme, 'x')}${fg(theme.muted)(' Stop  ')}${key(theme, 'r')}${fg(theme.muted)(' Restart  ')}${key(theme, '?')}${fg(theme.muted)(' Help')}`
   }
 
   const draw = () => {
     const selected = selectedPane()
     const selectedState = selectedSnapshot()
-    if (
-      !selected ||
-      !selectedState ||
-      headerText.isDestroyed ||
-      sidebar.isDestroyed ||
-      footerText.isDestroyed
-    )
-      return
+    if (!selected || !selectedState || chromeTitle.isDestroyed || sidebar.isDestroyed) return
     const input = snapshot.mode === 'input' && selected.terminal.focused
-    const cleanupFailed =
-      selectedState.lifecycle._tag === 'Cleaning' &&
-      selectedState.lifecycle.cleanup._tag === 'Failed'
-    const status = renderStatus(selectedState.lifecycle)
-    const statusStyle = statusAppearance(selectedState.lifecycle, theme)
-    const prefix = renderer.terminalWidth < 58 ? '' : 'cmdz / '
-    header.backgroundColor = input ? theme.selected : theme.surface
-    footer.backgroundColor = input ? theme.selected : theme.surface
-    headerText.content = t`${bold(fg(theme.accent)(prefix))}${bold(fg(theme.text)(selected.definition.title))}${fg(theme.muted)(' [')}${fg(statusStyle.color)(status)}${fg(theme.muted)(']  ')}${bold(fg(input ? theme.accent : theme.muted)(input ? 'INPUT' : 'NAVIGATION'))}`
-    drawFooter(input, cleanupFailed)
+    trafficLights.content = t`${fg(theme.danger)('●')} ${fg(theme.pending)('●')} ${fg(theme.info)('●')}`
+    const title = `${input ? 'INPUT · ' : ''}${selected.definition.title} · cmdz.ts`
+    chromeTitle.content = t`${fg(input ? theme.accent : theme.muted)(title)}`
     sidebar.visible = snapshot.sidebarVisible
-    sidebar.width = renderer.terminalWidth < 58 ? 18 : 22
-    for (const { pane, box, text } of sidebarRows) {
-      const state = snapshot.panes.find((candidate) => candidate.name === pane.definition.name)
-      const selectedRow = pane === selected
-      const appearance = state ? statusAppearance(state.lifecycle, theme) : undefined
-      const label = state ? renderStatus(state.lifecycle) : 'idle'
-      box.backgroundColor = selectedRow ? theme.selected : theme.surface
-      const title = selectedRow
-        ? bold(fg(theme.text)(pane.definition.title))
-        : fg(theme.text)(pane.definition.title)
-      text.content = t`${title}\n${fg(appearance?.color ?? theme.muted)(` ${appearance?.symbol ?? '○'} ${label}`)}`
+    sidebar.width = renderer.terminalWidth < 58 ? 20 : 27
+    for (const child of sidebar.getChildren()) sidebar.remove(child)
+    for (const { key } of sections) {
+      const sectionPanes = panes.filter((pane) => sectionForPane(pane) === key)
+      if (sectionPanes.length === 0) continue
+      const heading = sectionHeaders.get(key)
+      if (heading) sidebar.add(heading)
+      for (const pane of sectionPanes) {
+        const sidebarRow = sidebarRows.find((candidate) => candidate.pane === pane)
+        if (!sidebarRow) continue
+        const selectedRow = pane === selected
+        sidebarRow.box.backgroundColor = selectedRow ? theme.selected : theme.surface
+        sidebarRow.box.borderColor = selectedRow ? theme.accent : theme.surface
+        const color = statusColor(key, theme)
+        const title = selectedRow
+          ? bold(fg(theme.text)(pane.definition.title))
+          : fg(key === 'idle' ? theme.muted : theme.text)(pane.definition.title)
+        sidebarRow.text.content = t`${fg(color)('●')} ${title}`
+        sidebar.add(sidebarRow.box)
+      }
     }
     const outcome =
       selectedState.lifecycle._tag === 'Ready' ? selectedState.lifecycle.outcome : undefined
     emptyState.visible = outcome?._tag === 'Idle' || outcome?._tag === 'StartFailed'
     if (outcome?._tag === 'StartFailed')
-      emptyStateText.content = t`${bold(fg(theme.danger)('! start failed'))}\n${fg(theme.muted)(outcome.operation)}\n${fg(theme.text)('Enter retry')}`
+      emptyStateText.content = t`${bold(fg(theme.danger)('start failed'))}\n${fg(theme.muted)(outcome.operation)}\n${fg(theme.accent)('Enter retry')}`
     else
       emptyStateText.content = t`${bold(fg(theme.text)(selected.definition.title))}\n${fg(theme.muted)('Enter start')}`
     help.refresh(theme)
@@ -292,6 +290,7 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
     })
   }
   for (const pane of panes) bindTerminal(pane)
+  applyTheme()
   draw()
 
   const applySnapshot = (next: WorkspaceSnapshot) =>
@@ -341,8 +340,9 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
       if (state.lifecycle._tag === 'Running') selected.terminal.focus()
       else offer({ type: 'start', name: selected.definition.name, size: selected.size() })
     } else if (['j', 'k', 'up', 'down'].includes(keyEvent.name)) {
+      const order = orderedPanes()
       const delta = keyEvent.name === 'j' || keyEvent.name === 'down' ? 1 : -1
-      const next = panes[panes.indexOf(selected) + delta]
+      const next = order[order.indexOf(selected) + delta]
       if (next) {
         pendingSelected = next.definition.name
         offer({ type: 'select', name: next.definition.name })

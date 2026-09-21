@@ -51,7 +51,7 @@ export async function captureWorkspace(
   const captures: WorkspaceCapture[] = []
 
   try {
-    await workspace.waitFor('Demo [running]')
+    await workspace.waitFor('RUNNING')
     await workspace.waitFor('cmdz demo')
     captures.push(await saveFrame(output, 'navigation', workspace.captureSpans()))
 
@@ -63,15 +63,15 @@ export async function captureWorkspace(
     captures.push(await saveFrame(output, 'input', workspace.captureSpans()))
 
     workspace.mockInput.pressKey('z', { ctrl: true })
-    await workspace.waitFor('NAVIGATION')
+    await workspace.waitForMissing('INPUT')
     workspace.mockInput.pressKey('?')
     await workspace.waitFor('cmdz shortcuts')
     captures.push(await saveFrame(output, 'help', workspace.captureSpans()))
     workspace.mockInput.pressEscape()
-    await workspace.waitFor('Demo [running]')
+    await workspace.waitFor('Demo · cmdz.ts')
 
     workspace.resize(60, 18)
-    await workspace.waitFor('resized:60x16')
+    await workspace.waitFor('resized:58x14')
     captures.push(await saveFrame(output, 'compact-navigation', workspace.captureSpans()))
     workspace.mockInput.pressKey('?')
     await workspace.waitFor('Esc close')
@@ -125,7 +125,8 @@ async function renderSvg(frame: CapturedFrame) {
         )
       if (span.text) {
         const font = span.attributes & 1 ? bold : regular
-        const path = font.getPath(span.text, x, y + 15, 15, { kerning: false }).toPathData(2)
+        const fontSize = (cellWidth * 15) / font.getAdvanceWidth('M', 15, { kerning: false })
+        const path = font.getPath(span.text, x, y + 16, fontSize, { kerning: false }).toPathData(2)
         elements.push(
           `<path d="${path}" fill="${foreground}" aria-label="${escapeXml(span.text)}"/>`,
         )

@@ -28,6 +28,15 @@ export async function createWorkspace(definitions: readonly WorkspaceDefinition[
       }
       throw new Error(`Missing ${text}:\n${ui.captureCharFrame()}`)
     },
+    async waitForMissing(text: string) {
+      const deadline = performance.now() + 5000
+      while (performance.now() < deadline) {
+        await new Promise<void>((resolve) => setImmediate(resolve))
+        await ui.renderOnce()
+        if (!ui.captureCharFrame().includes(text)) return
+      }
+      throw new Error(`Still found ${text}:\n${ui.captureCharFrame()}`)
+    },
     async close() {
       controller.abort()
       await running

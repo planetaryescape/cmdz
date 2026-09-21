@@ -13,7 +13,7 @@ test('mouse focus, Ctrl-Z, and paste share the same input boundary', async () =>
     ui.mockInput.pressCtrlC()
     await ui.waitFor('RX:7178726a6b683f03')
     ui.mockInput.pressKey('z', { ctrl: true })
-    await ui.waitFor('NAVIGATION')
+    await ui.waitForMissing('INPUT')
     await ui.mockInput.pasteBracketedText('DROP')
     ui.mockInput.pressKey('j')
     ui.mockInput.pressKey('k')
@@ -32,13 +32,12 @@ test('mouse focus, Ctrl-Z, and paste share the same input boundary', async () =>
 test('clicking an inactive terminal cannot enter input mode', async () => {
   const ui = await createWorkspace([{ ...probe, autostart: false }])
   try {
-    await ui.waitFor('Probe [idle]')
+    await ui.waitFor('Enter start')
     await ui.mockMouse.click(30, 3)
-    await ui.waitFor('NAVIGATION')
-    expect(ui.captureCharFrame()).not.toContain('|  INPUT')
+    expect(ui.captureCharFrame()).not.toContain('INPUT')
     ui.mockInput.pressEnter()
     await ui.waitFor('PROBE_READY')
-    await ui.waitFor('NAVIGATION')
+    expect(ui.captureCharFrame()).not.toContain('INPUT')
   } finally {
     await ui.close()
   }
