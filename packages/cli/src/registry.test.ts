@@ -59,9 +59,9 @@ test('autostarts configured commands and isolates optional panes and input', asy
     await wait('First [stopped]')
     const rows = ui.captureCharFrame().split('\n').slice(1)
     const secondRow = rows.findIndex((line) => line.trimStart().startsWith('Second'))
-    const firstRow = rows.findIndex((line) => line.trimStart().startsWith('> First'))
+    const firstRow = rows.findIndex((line) => line.trimStart().startsWith('First'))
     expect(secondRow).toBeGreaterThanOrEqual(0)
-    expect(firstRow).toBeGreaterThan(secondRow)
+    expect(firstRow).toBeLessThan(secondRow)
     ui.mockInput.pressKey('q')
     expect((await running)._tag).toBe('Success')
   } finally {

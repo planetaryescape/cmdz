@@ -19,7 +19,7 @@ const captureFonts = Promise.all([
 
 /** File paths emitted for one captured TUI state. */
 export interface WorkspaceCapture {
-  readonly name: 'navigation' | 'input' | 'help'
+  readonly name: 'navigation' | 'input' | 'help' | 'compact-navigation' | 'compact-help'
   readonly svg: string
   readonly png?: string | undefined
 }
@@ -67,6 +67,15 @@ export async function captureWorkspace(
     workspace.mockInput.pressKey('?')
     await workspace.waitFor('cmdz shortcuts')
     captures.push(await saveFrame(output, 'help', workspace.captureSpans()))
+    workspace.mockInput.pressEscape()
+    await workspace.waitFor('Demo [running]')
+
+    workspace.resize(60, 18)
+    await workspace.waitFor('resized:60x16')
+    captures.push(await saveFrame(output, 'compact-navigation', workspace.captureSpans()))
+    workspace.mockInput.pressKey('?')
+    await workspace.waitFor('Esc close')
+    captures.push(await saveFrame(output, 'compact-help', workspace.captureSpans()))
   } finally {
     await workspace.close()
   }

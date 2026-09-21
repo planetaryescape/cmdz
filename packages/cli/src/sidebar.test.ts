@@ -6,7 +6,7 @@ test('sidebar visibility preserves selection and resizes foreground and backgrou
   const ui = await createWorkspace([probe, { ...probe, name: 'Other', title: 'Other' }])
   try {
     await ui.waitFor('PROBE_READY')
-    ui.mockInput.pressKey('j')
+    await ui.mockMouse.click(5, 5)
     await ui.waitFor('Other [running]')
     await ui.waitFor('PROBE_READY')
     ui.mockInput.pressKey('h')

@@ -43,7 +43,8 @@ test('surfaces failed cleanup and supports retry-only and retry-restart actions'
     driver.failCleanup('Demo', 1)
     ui.mockInput.pressKey('x')
     await waitForText('Demo [cleanup failed]')
-    await waitForText('x retry only | r retry + restart')
+    await waitForText('Retry cleanup')
+    await waitForText('Retry + restart')
     const directory = process.env.CMDZ_E2E_EVIDENCE
     if (directory) await Bun.write(`${directory}/cleanup-failed.txt`, ui.captureCharFrame())
 

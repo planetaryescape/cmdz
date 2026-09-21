@@ -25,7 +25,7 @@ Run in an interactive terminal. The checked-in `cmdz.ts` starts Demo automatical
 
 All keys except Ctrl-Z belong to the child in input mode. Paste is accepted only in input mode; navigation never forwards it to a child.
 
-Effect owns process and renderer cleanup; SIGINT and SIGTERM interrupt the session. Running commands are grouped above inactive ones without changing the selected command.
+Effect owns process and renderer cleanup; SIGINT and SIGTERM interrupt the session. Commands keep their configured order as lifecycle states change.
 
 ## Standalone binary
 

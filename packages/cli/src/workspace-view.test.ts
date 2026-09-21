@@ -36,9 +36,11 @@ test('starts, focuses, resizes, stops, and restarts one real command', async () 
   }
   try {
     await waitForText('Demo [idle]')
+    expect(ui.captureCharFrame()).toContain('Enter start')
     ui.mockInput.pressEnter()
     await waitForText('cmdz demo')
     await waitForText('Demo [running]')
+    expect(ui.captureCharFrame()).not.toContain('Enter start')
     ui.mockInput.pressEnter()
     await waitForText('INPUT')
     await ui.mockInput.typeText('hello')

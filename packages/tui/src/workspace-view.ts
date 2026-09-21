@@ -9,22 +9,61 @@ import {
 } from '@cmdz/core/workspace'
 import type { WorkspaceDefinition } from '@cmdz/core/workspace-definition'
 import { createWorkspaceRuntime } from '@cmdz/core/workspace-runtime'
-import { BoxRenderable, TextRenderable, type CliRenderer, type KeyEvent } from '@opentui/core'
+import {
+  bg,
+  bold,
+  BoxRenderable,
+  fg,
+  t,
+  TextRenderable,
+  type CliRenderer,
+  type KeyEvent,
+  type ThemeMode,
+} from '@opentui/core'
 import { Effect, Queue, Stream } from 'effect'
 
 import { createShortcutHelp } from './shortcut-help'
 import { TerminalPane } from './terminal-pane'
-
-function isActive(lifecycle: PaneLifecycle) {
-  return (
-    lifecycle._tag !== 'Ready' &&
-    (lifecycle._tag !== 'Cleaning' || lifecycle.cleanup._tag !== 'Failed')
-  )
-}
+import { workspaceTheme, type WorkspaceTheme } from './theme'
 
 type UiAction =
   | { readonly type: 'quit' }
   | { readonly type: 'command'; readonly command: WorkspaceCommand }
+
+interface StatusAppearance {
+  readonly symbol: string
+  readonly color: string
+}
+
+function statusAppearance(lifecycle: PaneLifecycle, theme: WorkspaceTheme): StatusAppearance {
+  switch (lifecycle._tag) {
+    case 'Starting':
+      return { symbol: '◐', color: theme.pending }
+    case 'Running':
+      return { symbol: '●', color: theme.running }
+    case 'Cleaning':
+      return lifecycle.cleanup._tag === 'Failed'
+        ? { symbol: '!', color: theme.danger }
+        : { symbol: '◐', color: theme.pending }
+    case 'Ready':
+      switch (lifecycle.outcome._tag) {
+        case 'Idle':
+          return { symbol: '○', color: theme.muted }
+        case 'Stopped':
+          return { symbol: '■', color: theme.muted }
+        case 'Succeeded':
+          return { symbol: '✓', color: theme.running }
+        case 'StartFailed':
+        case 'RuntimeFailed':
+        case 'Exited':
+          return { symbol: '!', color: theme.danger }
+      }
+  }
+}
+
+function key(theme: WorkspaceTheme, value: string) {
+  return bold(bg(theme.selected)(fg(theme.text)(` ${value} `)))
+}
 
 /** Renders workspace state and translates OpenTUI events to framework-independent commands. */
 export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* (
@@ -34,17 +73,74 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
 ) {
   const runtime = yield* createWorkspaceRuntime(controller)
   const actions = yield* Queue.unbounded<UiAction>()
-  const header = new TextRenderable(renderer, { id: 'status', height: 1 })
-  const footer = new TextRenderable(renderer, { id: 'help', height: 1 })
+  let theme = workspaceTheme(renderer.themeMode)
+  const header = new BoxRenderable(renderer, {
+    id: 'header',
+    height: 1,
+    paddingX: 1,
+    backgroundColor: theme.surface,
+  })
+  const headerText = new TextRenderable(renderer, {
+    id: 'status',
+    width: '100%',
+    height: 1,
+    fg: theme.text,
+    truncate: true,
+  })
+  const footer = new BoxRenderable(renderer, {
+    id: 'footer',
+    height: 1,
+    paddingX: 1,
+    backgroundColor: theme.surface,
+  })
+  const footerText = new TextRenderable(renderer, {
+    id: 'help',
+    width: '100%',
+    height: 1,
+    fg: theme.muted,
+    truncate: true,
+  })
   const row = new BoxRenderable(renderer, { id: 'workspace', flexDirection: 'row', flexGrow: 1 })
-  const sidebar = new TextRenderable(renderer, { id: 'sidebar', width: 22 })
+  const sidebar = new BoxRenderable(renderer, {
+    id: 'sidebar',
+    width: 22,
+    flexDirection: 'column',
+    border: ['right'],
+    borderColor: theme.border,
+    backgroundColor: theme.surface,
+  })
+  const sidebarTitle = new TextRenderable(renderer, {
+    id: 'sidebar-title',
+    width: '100%',
+    height: 2,
+    content: t`${fg(theme.muted)(` COMMANDS · ${definitions.length}`)}`,
+    truncate: true,
+  })
   const body = new BoxRenderable(renderer, { id: 'body', flexGrow: 1 })
+  const emptyState = new BoxRenderable(renderer, {
+    id: 'empty-state',
+    position: 'absolute',
+    width: '100%',
+    height: '100%',
+    zIndex: 2,
+    justifyContent: 'center',
+    alignItems: 'center',
+    visible: false,
+  })
+  const emptyStateText = new TextRenderable(renderer, {
+    id: 'empty-state-text',
+    fg: theme.muted,
+  })
+  header.add(headerText)
+  footer.add(footerText)
+  sidebar.add(sidebarTitle)
+  emptyState.add(emptyStateText)
   renderer.root.add(header)
   renderer.root.add(row)
   row.add(sidebar)
   row.add(body)
   renderer.root.add(footer)
-  const help = createShortcutHelp(renderer)
+  const help = createShortcutHelp(renderer, theme)
   renderer.root.add(help)
 
   const offer = (command: WorkspaceCommand) =>
@@ -66,49 +162,111 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
   )
   const panesByName = new Map(panes.map((pane) => [pane.definition.name, pane]))
   for (const pane of panes) body.add(pane.terminal)
+  body.add(emptyState)
   let snapshot = yield* controller.snapshot
   let pendingSelected = snapshot.selected
   let pendingSidebarVisible = snapshot.sidebarVisible
 
   const selectedPane = () => panesByName.get(snapshot.selected)
   const selectedSnapshot = () => snapshot.panes.find((pane) => pane.name === snapshot.selected)
-  const sortedPanes = () =>
-    [...panes].sort((left, right) => {
-      const leftState = snapshot.panes.find((pane) => pane.name === left.definition.name)
-      const rightState = snapshot.panes.find((pane) => pane.name === right.definition.name)
-      return (
-        Number(rightState ? isActive(rightState.lifecycle) : false) -
-          Number(leftState ? isActive(leftState.lifecycle) : false) || left.index - right.index
-      )
+  const sidebarRows = panes.map((pane) => {
+    const text = new TextRenderable(renderer, {
+      width: '100%',
+      height: 2,
+      paddingLeft: 1,
+      wrapMode: 'none',
+      truncate: true,
     })
+    const box = new BoxRenderable(renderer, {
+      id: `sidebar-${pane.index}`,
+      width: '100%',
+      height: 2,
+      backgroundColor: theme.surface,
+      onMouseDown: (event) => {
+        if (help.visible || snapshot.mode === 'input') return
+        pendingSelected = pane.definition.name
+        offer({ type: 'select', name: pane.definition.name })
+        event.preventDefault()
+        event.stopPropagation()
+      },
+    })
+    box.add(text)
+    sidebar.add(box)
+    return { pane, box, text }
+  })
+
+  const applyTheme = () => {
+    header.backgroundColor = theme.surface
+    headerText.fg = theme.text
+    footer.backgroundColor = theme.surface
+    footerText.fg = theme.muted
+    sidebar.backgroundColor = theme.surface
+    sidebar.borderColor = theme.border
+    sidebarTitle.content = t`${fg(theme.muted)(` COMMANDS · ${definitions.length}`)}`
+    emptyStateText.fg = theme.muted
+    help.refresh(theme)
+  }
+
+  const drawFooter = (input: boolean, cleanupFailed: boolean) => {
+    if (input) {
+      footerText.content =
+        renderer.terminalWidth < 80
+          ? t`${key(theme, '^Z')}${fg(theme.muted)(' Nav  ')}${key(theme, '^C')}${fg(theme.muted)(' Interrupt')}`
+          : t`${key(theme, 'Ctrl-Z')}${fg(theme.muted)(' Navigation  ')}${key(theme, 'Ctrl-C')}${fg(theme.muted)(' Interrupt child')}`
+      return
+    }
+    if (renderer.terminalWidth < 80) {
+      footerText.content = t`${key(theme, 'Enter')}${fg(theme.muted)(' Open  ')}${key(theme, 'h')}${fg(theme.muted)(' Commands  ')}${key(theme, '?')}${fg(theme.muted)(' Help')}`
+      return
+    }
+    footerText.content = cleanupFailed
+      ? t`${key(theme, 'x')}${fg(theme.muted)(' Retry cleanup  ')}${key(theme, 'r')}${fg(theme.muted)(' Retry + restart  ')}${key(theme, '?')}${fg(theme.muted)(' Help')}`
+      : t`${key(theme, '↑↓')}${fg(theme.muted)(' Select  ')}${key(theme, 'Enter')}${fg(theme.muted)(' Open  ')}${key(theme, 'x')}${fg(theme.muted)(' Stop  ')}${key(theme, 'r')}${fg(theme.muted)(' Restart  ')}${key(theme, '?')}${fg(theme.muted)(' Help')}`
+  }
+
   const draw = () => {
     const selected = selectedPane()
     const selectedState = selectedSnapshot()
     if (
       !selected ||
       !selectedState ||
-      header.isDestroyed ||
+      headerText.isDestroyed ||
       sidebar.isDestroyed ||
-      footer.isDestroyed
+      footerText.isDestroyed
     )
       return
     const input = snapshot.mode === 'input' && selected.terminal.focused
     const cleanupFailed =
       selectedState.lifecycle._tag === 'Cleaning' &&
       selectedState.lifecycle.cleanup._tag === 'Failed'
-    header.content = `cmdz  |  ${selected.definition.title} [${renderStatus(selectedState.lifecycle)}]  |  ${input ? 'INPUT' : 'NAVIGATION'}`
-    footer.content = input
-      ? 'Ctrl-Z sidebar  |  Ctrl-C interrupts child'
-      : cleanupFailed
-        ? 'x retry only | r retry + restart | q quit | ? help'
-        : 'j/k select | Enter start/focus | h sidebar | x stop | r restart | q quit | ? help'
+    const status = renderStatus(selectedState.lifecycle)
+    const statusStyle = statusAppearance(selectedState.lifecycle, theme)
+    const prefix = renderer.terminalWidth < 58 ? '' : 'cmdz / '
+    header.backgroundColor = input ? theme.selected : theme.surface
+    footer.backgroundColor = input ? theme.selected : theme.surface
+    headerText.content = t`${bold(fg(theme.accent)(prefix))}${bold(fg(theme.text)(selected.definition.title))}${fg(theme.muted)(' [')}${fg(statusStyle.color)(status)}${fg(theme.muted)(']  ')}${bold(fg(input ? theme.accent : theme.muted)(input ? 'INPUT' : 'NAVIGATION'))}`
+    drawFooter(input, cleanupFailed)
     sidebar.visible = snapshot.sidebarVisible
-    sidebar.content = sortedPanes()
-      .map((pane) => {
-        const state = snapshot.panes.find((candidate) => candidate.name === pane.definition.name)
-        return `${pane === selected ? '>' : ' '} ${pane.definition.title}\n  ${state ? renderStatus(state.lifecycle) : 'idle'}`
-      })
-      .join('\n')
+    sidebar.width = renderer.terminalWidth < 58 ? 18 : 22
+    for (const { pane, box, text } of sidebarRows) {
+      const state = snapshot.panes.find((candidate) => candidate.name === pane.definition.name)
+      const selectedRow = pane === selected
+      const appearance = state ? statusAppearance(state.lifecycle, theme) : undefined
+      const label = state ? renderStatus(state.lifecycle) : 'idle'
+      box.backgroundColor = selectedRow ? theme.selected : theme.surface
+      const title = selectedRow
+        ? bold(fg(theme.text)(pane.definition.title))
+        : fg(theme.text)(pane.definition.title)
+      text.content = t`${title}\n${fg(appearance?.color ?? theme.muted)(` ${appearance?.symbol ?? '○'} ${label}`)}`
+    }
+    const outcome =
+      selectedState.lifecycle._tag === 'Ready' ? selectedState.lifecycle.outcome : undefined
+    emptyState.visible = outcome?._tag === 'Idle' || outcome?._tag === 'StartFailed'
+    if (outcome?._tag === 'StartFailed')
+      emptyStateText.content = t`${bold(fg(theme.danger)('! start failed'))}\n${fg(theme.muted)(outcome.operation)}\n${fg(theme.text)('Enter retry')}`
+    else
+      emptyStateText.content = t`${bold(fg(theme.text)(selected.definition.title))}\n${fg(theme.muted)('Enter start')}`
+    help.refresh(theme)
     for (const pane of panes) pane.terminal.zIndex = pane === selected ? 1 : 0
   }
   const blur = () => {
@@ -161,56 +319,71 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
   yield* controller.events.pipe(Stream.runForEach(applyEvent), Effect.forkScoped)
   yield* Effect.yieldNow
 
-  const onKey = (key: KeyEvent) => {
+  const onKey = (keyEvent: KeyEvent) => {
     const selected = panesByName.get(pendingSelected)
     const state = snapshot.panes.find((pane) => pane.name === pendingSelected)
     if (!selected || !state) return
     if (help.visible) {
-      if (key.name === '?' || key.name === 'escape') help.visible = false
-      key.preventDefault()
-      key.stopPropagation()
+      if (keyEvent.name === '?' || keyEvent.name === 'escape') help.visible = false
+      keyEvent.preventDefault()
+      keyEvent.stopPropagation()
       return
     }
     if (selected.terminal.focused) {
-      if (key.ctrl && key.name === 'z') {
-        key.preventDefault()
-        key.stopPropagation()
+      if (keyEvent.ctrl && keyEvent.name === 'z') {
+        keyEvent.preventDefault()
+        keyEvent.stopPropagation()
         blur()
       }
       return
     }
-    if (key.name === 'return' || key.name === 'enter') {
+    if (keyEvent.name === 'return' || keyEvent.name === 'enter') {
       if (state.lifecycle._tag === 'Running') selected.terminal.focus()
       else offer({ type: 'start', name: selected.definition.name, size: selected.size() })
-    } else if (['j', 'k', 'up', 'down'].includes(key.name)) {
-      const order = sortedPanes()
-      const delta = key.name === 'j' || key.name === 'down' ? 1 : -1
-      const next = order[order.indexOf(selected) + delta]
+    } else if (['j', 'k', 'up', 'down'].includes(keyEvent.name)) {
+      const delta = keyEvent.name === 'j' || keyEvent.name === 'down' ? 1 : -1
+      const next = panes[panes.indexOf(selected) + delta]
       if (next) {
         pendingSelected = next.definition.name
         offer({ type: 'select', name: next.definition.name })
       }
-    } else if (key.name === '?') help.visible = true
-    else if (key.name === 'h') {
+    } else if (keyEvent.name === '?') help.visible = true
+    else if (keyEvent.name === 'h') {
       pendingSidebarVisible = !pendingSidebarVisible
       offer({ type: 'setSidebarVisible', visible: pendingSidebarVisible })
-    } else if (key.name === 'x') offer({ type: 'stop', name: selected.definition.name })
-    else if (key.name === 'r')
+    } else if (keyEvent.name === 'x') offer({ type: 'stop', name: selected.definition.name })
+    else if (keyEvent.name === 'r')
       offer({ type: 'restart', name: selected.definition.name, size: selected.size() })
-    else if (key.name === 'q' || (key.ctrl && key.name === 'c'))
+    else if (keyEvent.name === 'q' || (keyEvent.ctrl && keyEvent.name === 'c'))
       Queue.offerUnsafe(actions, { type: 'quit' })
-    key.preventDefault()
-    key.stopPropagation()
+    keyEvent.preventDefault()
+    keyEvent.stopPropagation()
+  }
+  const onResize = () => {
+    if (renderer.terminalWidth < 72 && pendingSidebarVisible) {
+      pendingSidebarVisible = false
+      offer({ type: 'setSidebarVisible', visible: false })
+    }
+    draw()
+  }
+  const onThemeMode = (mode: ThemeMode) => {
+    theme = workspaceTheme(mode)
+    applyTheme()
+    draw()
   }
   const onDestroy = () => Queue.offerUnsafe(actions, { type: 'quit' })
   yield* Effect.acquireRelease(
     Effect.sync(() => {
       renderer.keyInput.on('keypress', onKey)
+      renderer.on('resize', onResize)
+      renderer.on('theme_mode', onThemeMode)
       renderer.on('destroy', onDestroy)
     }),
     () =>
       Effect.sync(() => {
         renderer.keyInput.off('keypress', onKey)
+        renderer.off('resize', onResize)
+        renderer.off('theme_mode', onThemeMode)
         renderer.off('destroy', onDestroy)
       }),
   )
@@ -218,6 +391,10 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
   const initialSizes: Record<string, TerminalSize> = {}
   for (const pane of panes) initialSizes[pane.definition.name] = pane.size()
   yield* runtime.initialize(initialSizes)
+  if (renderer.terminalWidth < 72 && pendingSidebarVisible) {
+    pendingSidebarVisible = false
+    offer({ type: 'setSidebarVisible', visible: false })
+  }
   yield* Effect.logInfo('Process workspace ready')
   const run = Effect.gen(function* () {
     while (true) {
