@@ -17,7 +17,8 @@ import { TerminalPane } from './terminal-pane'
 
 function isActive(lifecycle: PaneLifecycle) {
   return (
-    lifecycle._tag === 'Starting' || lifecycle._tag === 'Running' || lifecycle._tag === 'Stopping'
+    lifecycle._tag !== 'Ready' &&
+    (lifecycle._tag !== 'Cleaning' || lifecycle.cleanup._tag !== 'Failed')
   )
 }
 
@@ -92,10 +93,15 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
     )
       return
     const input = snapshot.mode === 'input' && selected.terminal.focused
+    const cleanupFailed =
+      selectedState.lifecycle._tag === 'Cleaning' &&
+      selectedState.lifecycle.cleanup._tag === 'Failed'
     header.content = `cmdz  |  ${selected.definition.title} [${renderStatus(selectedState.lifecycle)}]  |  ${input ? 'INPUT' : 'NAVIGATION'}`
     footer.content = input
       ? 'Ctrl-Z sidebar  |  Ctrl-C interrupts child'
-      : 'j/k select | Enter start/focus | h sidebar | x stop | r restart | q quit | ? help'
+      : cleanupFailed
+        ? 'x retry only | r retry + restart | q quit | ? help'
+        : 'j/k select | Enter start/focus | h sidebar | x stop | r restart | q quit | ? help'
     sidebar.visible = snapshot.sidebarVisible
     sidebar.content = sortedPanes()
       .map((pane) => {

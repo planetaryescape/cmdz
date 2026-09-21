@@ -8,31 +8,47 @@ import {
 } from './process-driver'
 import type { WorkspaceDefinition } from './workspace-definition'
 
-export type PaneFailure = Data.TaggedEnum<{
+/** The user-visible outcome of a run after the controller releases its resources. */
+export type PaneOutcome = Data.TaggedEnum<{
+  readonly Idle: Record<never, never>
+  readonly Stopped: Record<never, never>
+  readonly Succeeded: { readonly exitCode: 0 }
   readonly StartFailed: { readonly operation: string }
   readonly RuntimeFailed: { readonly operation: string }
   readonly Exited: { readonly exitCode: number }
-  readonly CleanupFailed: {
+}>
+
+/** Constructors and matchers for pane outcomes. */
+export const PaneOutcome = Data.taggedEnum<PaneOutcome>()
+
+/** Outcomes available once a process was successfully started. */
+export type PaneTerminalOutcome = Exclude<PaneOutcome, { readonly _tag: 'Idle' | 'StartFailed' }>
+
+/** Cleanup progress for a run whose process resources are still owned by the controller. */
+export type PaneCleanup = Data.TaggedEnum<{
+  readonly Pending: Record<never, never>
+  readonly Failed: {
     readonly operation: string
     readonly processGroupId?: number | undefined
-    readonly priorExitCode?: number | undefined
-    readonly priorRuntimeOperation?: string | undefined
-    readonly stopRequested?: boolean | undefined
   }
 }>
 
-export const PaneFailure = Data.taggedEnum<PaneFailure>()
+/** Constructors and matchers for pane cleanup progress. */
+export const PaneCleanup = Data.taggedEnum<PaneCleanup>()
 
+/** The observable ownership lifecycle of a pane. */
 export type PaneLifecycle = Data.TaggedEnum<{
-  readonly Idle: { readonly lastRun: number }
+  readonly Ready: { readonly lastRun: number; readonly outcome: PaneOutcome }
   readonly Starting: { readonly run: number }
   readonly Running: { readonly run: number }
-  readonly Stopping: { readonly run: number }
-  readonly Stopped: { readonly run: number }
-  readonly Succeeded: { readonly run: number; readonly exitCode: 0 }
-  readonly Failed: { readonly run: number; readonly failure: PaneFailure }
+  readonly Cleaning: {
+    readonly run: number
+    readonly target: PaneTerminalOutcome
+    readonly cleanup: PaneCleanup
+  }
 }>
 
+/** Constructors and matchers for observable pane lifecycle states. */
 export const PaneLifecycle = Data.taggedEnum<PaneLifecycle>()
 
 export interface PaneSnapshot {
@@ -92,8 +108,7 @@ export interface CleanupFailure {
   readonly run: number
   readonly operation: string
   readonly processGroupId?: number | undefined
-  readonly priorExitCode?: number | undefined
-  readonly priorRuntimeOperation?: string | undefined
+  readonly target: PaneTerminalOutcome
 }
 
 export class WorkspaceShutdownError extends Data.TaggedError('WorkspaceShutdownError')<{
@@ -113,57 +128,132 @@ export interface WorkspaceController {
   readonly shutdown: Effect.Effect<void, WorkspaceShutdownError>
 }
 
-interface ActiveRun {
-  readonly run: number
-  readonly process: ProcessRun
+type InternalPaneLifecycle =
+  | Extract<PaneLifecycle, { readonly _tag: 'Ready' | 'Starting' }>
+  | (Extract<PaneLifecycle, { readonly _tag: 'Running' }> & {
+      readonly process: ProcessRun
+    })
+  | (Extract<PaneLifecycle, { readonly _tag: 'Cleaning' }> & {
+      readonly process: ProcessRun
+    })
+
+interface InternalPane {
+  readonly name: string
+  readonly title: string
+  readonly lifecycle: InternalPaneLifecycle
 }
 
-function paneRun(lifecycle: PaneLifecycle) {
-  return lifecycle._tag === 'Idle' ? lifecycle.lastRun : lifecycle.run
+interface ControllerState {
+  readonly panes: readonly InternalPane[]
+  readonly selected: string
+  readonly mode: 'navigation' | 'input'
+  readonly sidebarVisible: boolean
+  readonly shuttingDown: boolean
 }
 
-function isActive(lifecycle: PaneLifecycle) {
-  return (
-    lifecycle._tag === 'Starting' || lifecycle._tag === 'Running' || lifecycle._tag === 'Stopping'
-  )
+const runningPane = (run: number, process: ProcessRun): InternalPaneLifecycle => ({
+  _tag: 'Running',
+  run,
+  process,
+})
+
+const cleaningPane = (
+  run: number,
+  process: ProcessRun,
+  target: PaneTerminalOutcome,
+  cleanup: PaneCleanup,
+): InternalPaneLifecycle => ({
+  _tag: 'Cleaning',
+  run,
+  process,
+  target,
+  cleanup,
+})
+
+function paneRun(lifecycle: PaneLifecycle | InternalPaneLifecycle) {
+  return lifecycle._tag === 'Ready' ? lifecycle.lastRun : lifecycle.run
+}
+
+function isActive(lifecycle: PaneLifecycle | InternalPaneLifecycle) {
+  return lifecycle._tag !== 'Ready' && !isCleanupFailed(lifecycle)
+}
+
+function isCleanupFailed(lifecycle: PaneLifecycle | InternalPaneLifecycle) {
+  return lifecycle._tag === 'Cleaning' && lifecycle.cleanup._tag === 'Failed'
 }
 
 function updatePane(
-  snapshot: WorkspaceSnapshot,
+  state: ControllerState,
   name: string,
-  update: (pane: PaneSnapshot) => PaneSnapshot,
-): WorkspaceSnapshot {
+  update: (pane: InternalPane) => InternalPane,
+): ControllerState {
   return {
-    ...snapshot,
-    panes: snapshot.panes.map((pane) => (pane.name === name ? update(pane) : pane)),
+    ...state,
+    panes: state.panes.map((pane) => (pane.name === name ? update(pane) : pane)),
   }
 }
 
-function findPane(snapshot: WorkspaceSnapshot, name: string) {
-  return snapshot.panes.find((pane) => pane.name === name)
+function findPane(state: ControllerState, name: string) {
+  return state.panes.find((pane) => pane.name === name)
 }
 
+function toPaneLifecycle(lifecycle: InternalPaneLifecycle): PaneLifecycle {
+  switch (lifecycle._tag) {
+    case 'Ready':
+    case 'Starting':
+      return lifecycle
+    case 'Running':
+      return PaneLifecycle.Running({ run: lifecycle.run })
+    case 'Cleaning':
+      return PaneLifecycle.Cleaning({
+        run: lifecycle.run,
+        target: lifecycle.target,
+        cleanup: lifecycle.cleanup,
+      })
+  }
+}
+
+function toWorkspaceSnapshot(state: ControllerState): WorkspaceSnapshot {
+  return {
+    panes: state.panes.map((pane) => ({
+      name: pane.name,
+      title: pane.title,
+      lifecycle: toPaneLifecycle(pane.lifecycle),
+    })),
+    selected: state.selected,
+    mode: state.mode,
+    sidebarVisible: state.sidebarVisible,
+    shuttingDown: state.shuttingDown,
+  }
+}
+
+/** Projects a pane lifecycle to its compact TUI status. */
 export function renderStatus(lifecycle: PaneLifecycle) {
   switch (lifecycle._tag) {
-    case 'Idle':
-      return 'idle'
+    case 'Ready':
+      switch (lifecycle.outcome._tag) {
+        case 'Idle':
+          return 'idle'
+        case 'Stopped':
+          return 'stopped'
+        case 'Succeeded':
+          return 'succeeded'
+        case 'Exited':
+          return `failed (${lifecycle.outcome.exitCode})`
+        case 'StartFailed':
+        case 'RuntimeFailed':
+          return 'failed'
+      }
     case 'Starting':
       return 'starting'
     case 'Running':
       return 'running'
-    case 'Stopping':
-      return 'stopping'
-    case 'Stopped':
-      return 'stopped'
-    case 'Succeeded':
-      return 'succeeded'
-    case 'Failed':
-      return lifecycle.failure._tag === 'Exited'
-        ? `failed (${lifecycle.failure.exitCode})`
-        : 'failed'
+    case 'Cleaning':
+      return lifecycle.cleanup._tag === 'Failed' ? 'cleanup failed' : 'stopping'
   }
 }
 
+/** Creates a scoped controller that exclusively owns each pane's active process run. */
 export const createWorkspaceController = Effect.fn('workspace.controller.make')(function* (
   definitions: readonly WorkspaceDefinition[],
 ): Effect.fn.Return<WorkspaceController, never, Scope.Scope | ProcessDriver> {
@@ -171,11 +261,11 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
   const first = definitions[0]
   if (!first) throw new Error('Workspace requires at least one command.')
   const scope = yield* Effect.scope
-  const state = yield* SubscriptionRef.make<WorkspaceSnapshot>({
+  const state = yield* SubscriptionRef.make<ControllerState>({
     panes: definitions.map((definition) => ({
       name: definition.name,
       title: definition.title,
-      lifecycle: PaneLifecycle.Idle({ lastRun: 0 }),
+      lifecycle: PaneLifecycle.Ready({ lastRun: 0, outcome: PaneOutcome.Idle() }),
     })),
     selected: first.name,
     mode: 'navigation',
@@ -185,18 +275,17 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
   const events = yield* Queue.unbounded<WorkspaceEvent>()
   const lifecycle = yield* Semaphore.make(1)
   const definitionsByName = new Map(definitions.map((definition) => [definition.name, definition]))
-  const activeRuns = new Map<string, ActiveRun>()
   let initialized = false
 
   const commandError = (reason: WorkspaceCommandError['reason'], name?: string) =>
     new WorkspaceCommandError({ reason, name })
 
-  const setPaneLifecycle = (name: string, run: number, next: PaneLifecycle) =>
-    SubscriptionRef.updateAndGet(state, (snapshot): WorkspaceSnapshot => {
-      const pane = findPane(snapshot, name)
-      if (!pane || paneRun(pane.lifecycle) !== run) return snapshot
-      const updated = updatePane(snapshot, name, () => ({ ...pane, lifecycle: next }))
-      return snapshot.selected === name && !isActive(next)
+  const setPaneLifecycle = (name: string, run: number, next: InternalPaneLifecycle) =>
+    SubscriptionRef.updateAndGet(state, (current): ControllerState => {
+      const pane = findPane(current, name)
+      if (!pane || paneRun(pane.lifecycle) !== run) return current
+      const updated = updatePane(current, name, () => ({ ...pane, lifecycle: next }))
+      return current.selected === name && !isActive(next)
         ? { ...updated, mode: 'navigation' }
         : updated
     })
@@ -204,63 +293,63 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
   const completeRun = (
     name: string,
     run: number,
-    exitCode: number | undefined,
-    runtimeOperation: string | undefined,
+    process: ProcessRun,
+    target: PaneTerminalOutcome,
   ) =>
     Effect.gen(function* () {
-      const active = activeRuns.get(name)
-      if (!active || active.run !== run) return
-      const cleanup = yield* Effect.result(active.process.cleanup)
+      const ownsRun = yield* lifecycle.withPermit(
+        Effect.gen(function* () {
+          const current = yield* SubscriptionRef.get(state)
+          const pane = findPane(current, name)
+          if (
+            !pane ||
+            pane.lifecycle._tag !== 'Running' ||
+            pane.lifecycle.run !== run ||
+            pane.lifecycle.process !== process
+          )
+            return false
+          yield* setPaneLifecycle(
+            name,
+            run,
+            cleaningPane(run, process, target, PaneCleanup.Pending()),
+          )
+          return true
+        }),
+      )
+      if (!ownsRun) return
+      const cleanup = yield* Effect.result(process.cleanup)
       yield* lifecycle.withPermit(
         Effect.gen(function* () {
-          const currentActive = activeRuns.get(name)
+          const current = yield* SubscriptionRef.get(state)
+          const pane = findPane(current, name)
           if (
-            !currentActive ||
-            currentActive.run !== run ||
-            currentActive.process !== active.process
+            !pane ||
+            pane.lifecycle._tag !== 'Cleaning' ||
+            pane.lifecycle.run !== run ||
+            pane.lifecycle.process !== process
           )
             return
-          const snapshot = yield* SubscriptionRef.get(state)
-          const pane = findPane(snapshot, name)
-          if (!pane || paneRun(pane.lifecycle) !== run) return
           if (Result.isFailure(cleanup)) {
             yield* setPaneLifecycle(
               name,
               run,
-              PaneLifecycle.Failed({
+              cleaningPane(
                 run,
-                failure: PaneFailure.CleanupFailed({
+                process,
+                pane.lifecycle.target,
+                PaneCleanup.Failed({
                   operation: cleanup.failure.operation,
                   processGroupId: cleanup.failure.processGroupId,
-                  priorExitCode: exitCode,
-                  priorRuntimeOperation: runtimeOperation,
-                  stopRequested: pane.lifecycle._tag === 'Stopping',
                 }),
-              }),
+              ),
             )
             return
           }
-          activeRuns.delete(name)
-          if (pane.lifecycle._tag === 'Stopping') {
-            yield* setPaneLifecycle(name, run, PaneLifecycle.Stopped({ run }))
-          } else if (runtimeOperation) {
-            yield* setPaneLifecycle(
-              name,
-              run,
-              PaneLifecycle.Failed({
-                run,
-                failure: PaneFailure.RuntimeFailed({ operation: runtimeOperation }),
-              }),
-            )
-          } else if (exitCode === 0) {
-            yield* setPaneLifecycle(name, run, PaneLifecycle.Succeeded({ run, exitCode: 0 }))
-          } else if (exitCode !== undefined) {
-            yield* setPaneLifecycle(
-              name,
-              run,
-              PaneLifecycle.Failed({ run, failure: PaneFailure.Exited({ exitCode }) }),
-            )
-          }
+          yield* setPaneLifecycle(
+            name,
+            run,
+            PaneLifecycle.Ready({ lastRun: run, outcome: pane.lifecycle.target }),
+          )
         }),
       )
     })
@@ -268,8 +357,22 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
   const watchRun = (name: string, run: number, process: ProcessRun) =>
     process.awaitExit.pipe(
       Effect.matchEffect({
-        onFailure: (error) => completeRun(name, run, undefined, error.operation),
-        onSuccess: (code) => completeRun(name, run, code, undefined),
+        onFailure: (error) =>
+          completeRun(
+            name,
+            run,
+            process,
+            PaneOutcome.RuntimeFailed({ operation: error.operation }),
+          ),
+        onSuccess: (code) =>
+          completeRun(
+            name,
+            run,
+            process,
+            code === 0
+              ? PaneOutcome.Succeeded({ exitCode: 0 })
+              : PaneOutcome.Exited({ exitCode: code }),
+          ),
       }),
     )
 
@@ -281,9 +384,9 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
       const definition = definitionsByName.get(name)
       const pane = findPane(snapshot, name)
       if (!definition || !pane) return yield* Effect.fail(commandError('unknownPane', name))
-      if (isActive(pane.lifecycle))
+      if (pane.lifecycle._tag !== 'Ready' && !isCleanupFailed(pane.lifecycle))
         return yield* Effect.fail(commandError('paneAlreadyActive', name))
-      if (pane.lifecycle._tag === 'Failed' && pane.lifecycle.failure._tag === 'CleanupFailed')
+      if (isCleanupFailed(pane.lifecycle))
         return yield* Effect.fail(commandError('paneCleanupUnresolved', name))
       const run = paneRun(pane.lifecycle) + 1
       yield* SubscriptionRef.update(state, (current) =>
@@ -316,23 +419,23 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
           .pipe(Effect.result),
       )
       if (Result.isFailure(started)) {
-        return yield* setPaneLifecycle(
+        const failed = yield* setPaneLifecycle(
           name,
           run,
-          PaneLifecycle.Failed({
-            run,
-            failure: PaneFailure.StartFailed({ operation: started.failure.operation }),
+          PaneLifecycle.Ready({
+            lastRun: run,
+            outcome: PaneOutcome.StartFailed({ operation: started.failure.operation }),
           }),
         )
+        return toWorkspaceSnapshot(failed)
       }
       yield* Effect.uninterruptible(
         Effect.gen(function* () {
-          activeRuns.set(name, { run, process: started.success })
-          yield* setPaneLifecycle(name, run, PaneLifecycle.Running({ run }))
+          yield* setPaneLifecycle(name, run, runningPane(run, started.success))
           yield* Effect.forkIn(watchRun(name, run, started.success), scope)
         }),
       )
-      return yield* SubscriptionRef.get(state)
+      return toWorkspaceSnapshot(yield* SubscriptionRef.get(state))
     })
 
   const stopLocked = (name: string) =>
@@ -340,29 +443,39 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
       const snapshot = yield* SubscriptionRef.get(state)
       const pane = findPane(snapshot, name)
       if (!pane) return yield* Effect.fail(commandError('unknownPane', name))
-      if (!isActive(pane.lifecycle)) return snapshot
-      const run = paneRun(pane.lifecycle)
-      const active = activeRuns.get(name)
-      if (!active || active.run !== run)
+      if (pane.lifecycle._tag === 'Ready') return toWorkspaceSnapshot(snapshot)
+      if (pane.lifecycle._tag === 'Starting')
         return yield* Effect.fail(commandError('paneNotRunning', name))
-      yield* setPaneLifecycle(name, run, PaneLifecycle.Stopping({ run }))
-      const cleanup = yield* Effect.result(active.process.cleanup)
+      const run = pane.lifecycle.run
+      const process = pane.lifecycle.process
+      yield* setPaneLifecycle(
+        name,
+        run,
+        cleaningPane(run, process, PaneOutcome.Stopped(), PaneCleanup.Pending()),
+      )
+      const cleanup = yield* Effect.result(process.cleanup)
       if (Result.isFailure(cleanup)) {
-        return yield* setPaneLifecycle(
+        const failed = yield* setPaneLifecycle(
           name,
           run,
-          PaneLifecycle.Failed({
+          cleaningPane(
             run,
-            failure: PaneFailure.CleanupFailed({
+            process,
+            PaneOutcome.Stopped(),
+            PaneCleanup.Failed({
               operation: cleanup.failure.operation,
               processGroupId: cleanup.failure.processGroupId,
-              stopRequested: true,
             }),
-          }),
+          ),
         )
+        return toWorkspaceSnapshot(failed)
       }
-      activeRuns.delete(name)
-      return yield* setPaneLifecycle(name, run, PaneLifecycle.Stopped({ run }))
+      const stopped = yield* setPaneLifecycle(
+        name,
+        run,
+        PaneLifecycle.Ready({ lastRun: run, outcome: PaneOutcome.Stopped() }),
+      )
+      return toWorkspaceSnapshot(stopped)
     })
 
   const initialize = (initialSizes: Readonly<Record<string, TerminalSize>>) =>
@@ -379,7 +492,7 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
           if (!size) return yield* Effect.fail(commandError('missingTerminalSize', definition.name))
           yield* startLocked(definition.name, size)
         }
-        return yield* SubscriptionRef.get(state)
+        return toWorkspaceSnapshot(yield* SubscriptionRef.get(state))
       }),
     )
 
@@ -391,7 +504,8 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
           return yield* Effect.fail(commandError('workspaceShuttingDown', command.name))
         const pane = findPane(snapshot, command.name)
         if (!pane) return yield* Effect.fail(commandError('unknownPane', command.name))
-        if (command.type === 'resize' && pane.lifecycle._tag !== 'Running') return snapshot
+        if (command.type === 'resize' && pane.lifecycle._tag !== 'Running')
+          return toWorkspaceSnapshot(snapshot)
         if (
           pane.lifecycle._tag !== 'Running' ||
           (command.type === 'write' &&
@@ -402,12 +516,9 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
             (snapshot.selected !== command.name || snapshot.mode !== 'input'))
         )
           return yield* Effect.fail(commandError('paneNotRunning', command.name))
-        const active = activeRuns.get(command.name)
-        if (!active || active.run !== pane.lifecycle.run)
-          return yield* Effect.fail(commandError('paneNotRunning', command.name))
-        if (command.type === 'write') yield* active.process.write(command.bytes)
-        else yield* active.process.resize(command.size)
-        return yield* SubscriptionRef.get(state)
+        if (command.type === 'write') yield* pane.lifecycle.process.write(command.bytes)
+        else yield* pane.lifecycle.process.resize(command.size)
+        return toWorkspaceSnapshot(yield* SubscriptionRef.get(state))
       })
 
     return lifecycle.withPermit(
@@ -429,41 +540,46 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
             return yield* stopLocked(command.name)
           case 'restart': {
             const stopped = yield* stopLocked(command.name)
-            const pane = findPane(stopped, command.name)
-            if (
-              pane?.lifecycle._tag === 'Failed' &&
-              pane.lifecycle.failure._tag === 'CleanupFailed'
-            )
+            const pane = stopped.panes.find((candidate) => candidate.name === command.name)
+            if (pane && isCleanupFailed(pane.lifecycle))
               return yield* Effect.fail(commandError('paneCleanupUnresolved', command.name))
             return yield* startLocked(command.name, command.size)
           }
           case 'select':
             if (!findPane(snapshot, command.name))
               return yield* Effect.fail(commandError('unknownPane', command.name))
-            return yield* SubscriptionRef.updateAndGet(state, (current): WorkspaceSnapshot => ({
-              ...current,
-              selected: command.name,
-              mode: 'navigation',
-            }))
+            return toWorkspaceSnapshot(
+              yield* SubscriptionRef.updateAndGet(state, (current): ControllerState => ({
+                ...current,
+                selected: command.name,
+                mode: 'navigation',
+              })),
+            )
           case 'enterInput': {
             const pane = findPane(snapshot, command.name)
             if (!pane || snapshot.selected !== command.name || pane.lifecycle._tag !== 'Running')
               return yield* Effect.fail(commandError('paneNotRunning', command.name))
-            return yield* SubscriptionRef.updateAndGet(state, (current): WorkspaceSnapshot => ({
-              ...current,
-              mode: 'input',
-            }))
+            return toWorkspaceSnapshot(
+              yield* SubscriptionRef.updateAndGet(state, (current): ControllerState => ({
+                ...current,
+                mode: 'input',
+              })),
+            )
           }
           case 'leaveInput':
-            return yield* SubscriptionRef.updateAndGet(state, (current): WorkspaceSnapshot => ({
-              ...current,
-              mode: 'navigation',
-            }))
+            return toWorkspaceSnapshot(
+              yield* SubscriptionRef.updateAndGet(state, (current): ControllerState => ({
+                ...current,
+                mode: 'navigation',
+              })),
+            )
           case 'setSidebarVisible':
-            return yield* SubscriptionRef.updateAndGet(state, (current) => ({
-              ...current,
-              sidebarVisible: command.visible,
-            }))
+            return toWorkspaceSnapshot(
+              yield* SubscriptionRef.updateAndGet(state, (current) => ({
+                ...current,
+                sidebarVisible: command.visible,
+              })),
+            )
         }
       }),
     )
@@ -471,91 +587,59 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
 
   const shutdownEffect = lifecycle.withPermit(
     Effect.gen(function* () {
-      yield* SubscriptionRef.update(state, (snapshot): WorkspaceSnapshot => ({
-        ...snapshot,
+      yield* SubscriptionRef.update(state, (current): ControllerState => ({
+        ...current,
         mode: 'navigation',
         shuttingDown: true,
       }))
       const failures: CleanupFailure[] = []
-      for (const [name, active] of Array.from(activeRuns)) {
-        const cleanup = yield* Effect.result(active.process.cleanup)
+      const ownedPanes = (yield* SubscriptionRef.get(state)).panes.filter(
+        (
+          pane,
+        ): pane is InternalPane & {
+          readonly lifecycle: Extract<
+            InternalPaneLifecycle,
+            { readonly _tag: 'Running' | 'Cleaning' }
+          >
+        } => pane.lifecycle._tag === 'Running' || pane.lifecycle._tag === 'Cleaning',
+      )
+      for (const ownedPane of ownedPanes) {
+        const { name } = ownedPane
+        const owned = ownedPane.lifecycle
+        const target = owned._tag === 'Cleaning' ? owned.target : PaneOutcome.Stopped()
+        yield* setPaneLifecycle(
+          name,
+          owned.run,
+          cleaningPane(owned.run, owned.process, target, PaneCleanup.Pending()),
+        )
+        const cleanup = yield* Effect.result(owned.process.cleanup)
         if (Result.isFailure(cleanup)) {
-          const snapshot = yield* SubscriptionRef.get(state)
-          const pane = findPane(snapshot, name)
-          const priorExitCode =
-            pane?.lifecycle._tag === 'Failed' && pane.lifecycle.failure._tag === 'CleanupFailed'
-              ? pane.lifecycle.failure.priorExitCode
-              : undefined
-          const stopRequested =
-            pane?.lifecycle._tag === 'Failed' && pane.lifecycle.failure._tag === 'CleanupFailed'
-              ? pane.lifecycle.failure.stopRequested
-              : undefined
-          const priorRuntimeOperation =
-            pane?.lifecycle._tag === 'Failed' && pane.lifecycle.failure._tag === 'CleanupFailed'
-              ? pane.lifecycle.failure.priorRuntimeOperation
-              : undefined
           failures.push({
             name,
-            run: active.run,
+            run: owned.run,
             operation: cleanup.failure.operation,
             processGroupId: cleanup.failure.processGroupId,
-            priorExitCode,
-            priorRuntimeOperation,
+            target,
           })
           yield* setPaneLifecycle(
             name,
-            active.run,
-            PaneLifecycle.Failed({
-              run: active.run,
-              failure: PaneFailure.CleanupFailed({
+            owned.run,
+            cleaningPane(
+              owned.run,
+              owned.process,
+              target,
+              PaneCleanup.Failed({
                 operation: cleanup.failure.operation,
                 processGroupId: cleanup.failure.processGroupId,
-                priorExitCode,
-                priorRuntimeOperation,
-                stopRequested,
               }),
-            }),
+            ),
           )
         } else {
-          activeRuns.delete(name)
-          const snapshot = yield* SubscriptionRef.get(state)
-          const pane = findPane(snapshot, name)
-          const failedCleanup =
-            pane?.lifecycle._tag === 'Failed' && pane.lifecycle.failure._tag === 'CleanupFailed'
-              ? pane.lifecycle.failure
-              : undefined
-          if (failedCleanup?.stopRequested)
-            yield* setPaneLifecycle(name, active.run, PaneLifecycle.Stopped({ run: active.run }))
-          else if (failedCleanup?.priorRuntimeOperation)
-            yield* setPaneLifecycle(
-              name,
-              active.run,
-              PaneLifecycle.Failed({
-                run: active.run,
-                failure: PaneFailure.RuntimeFailed({
-                  operation: failedCleanup.priorRuntimeOperation,
-                }),
-              }),
-            )
-          else if (failedCleanup?.priorExitCode === 0)
-            yield* setPaneLifecycle(
-              name,
-              active.run,
-              PaneLifecycle.Succeeded({
-                run: active.run,
-                exitCode: 0,
-              }),
-            )
-          else if (failedCleanup?.priorExitCode !== undefined)
-            yield* setPaneLifecycle(
-              name,
-              active.run,
-              PaneLifecycle.Failed({
-                run: active.run,
-                failure: PaneFailure.Exited({ exitCode: failedCleanup.priorExitCode }),
-              }),
-            )
-          else yield* setPaneLifecycle(name, active.run, PaneLifecycle.Stopped({ run: active.run }))
+          yield* setPaneLifecycle(
+            name,
+            owned.run,
+            PaneLifecycle.Ready({ lastRun: owned.run, outcome: target }),
+          )
         }
       }
       if (failures.length > 0) return yield* Effect.fail(new WorkspaceShutdownError({ failures }))
@@ -573,9 +657,9 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
   )
 
   return {
-    snapshots: SubscriptionRef.changes(state),
+    snapshots: SubscriptionRef.changes(state).pipe(Stream.map(toWorkspaceSnapshot)),
     events: Stream.fromQueue(events),
-    snapshot: SubscriptionRef.get(state),
+    snapshot: SubscriptionRef.get(state).pipe(Effect.map(toWorkspaceSnapshot)),
     initialize,
     dispatch,
     shutdown,

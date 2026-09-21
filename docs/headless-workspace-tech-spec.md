@@ -165,24 +165,29 @@ The PTY adapter knows `/bin/sh -c`, cwd, environment, PTY dimensions, raw bytes,
 ```ts
 export type RunId = number
 
-export type PaneLifecycle =
-  | { readonly _tag: 'Idle'; readonly lastRun: RunId }
-  | { readonly _tag: 'Starting'; readonly run: RunId }
-  | { readonly _tag: 'Running'; readonly run: RunId }
-  | { readonly _tag: 'Stopping'; readonly run: RunId }
-  | { readonly _tag: 'Stopped'; readonly run: RunId }
-  | { readonly _tag: 'Succeeded'; readonly run: RunId; readonly exitCode: 0 }
-  | { readonly _tag: 'Failed'; readonly run: RunId; readonly failure: PaneFailure }
-
-export type PaneFailure =
+export type PaneOutcome =
+  | { readonly _tag: 'Idle' }
+  | { readonly _tag: 'Stopped' }
+  | { readonly _tag: 'Succeeded'; readonly exitCode: 0 }
   | { readonly _tag: 'StartFailed'; readonly operation: string }
   | { readonly _tag: 'RuntimeFailed'; readonly operation: string }
   | { readonly _tag: 'Exited'; readonly exitCode: number }
+
+export type PaneLifecycle =
+  | { readonly _tag: 'Ready'; readonly lastRun: RunId; readonly outcome: PaneOutcome }
+  | { readonly _tag: 'Starting'; readonly run: RunId }
+  | { readonly _tag: 'Running'; readonly run: RunId }
   | {
-      readonly _tag: 'CleanupFailed'
-      readonly operation: string
-      readonly processGroupId?: number
-      readonly priorExitCode?: number
+      readonly _tag: 'Cleaning'
+      readonly run: RunId
+      readonly target: Exclude<PaneOutcome, { readonly _tag: 'Idle' | 'StartFailed' }>
+      readonly cleanup:
+        | { readonly _tag: 'Pending' }
+        | {
+            readonly _tag: 'Failed'
+            readonly operation: string
+            readonly processGroupId?: number
+          }
     }
 
 export interface PaneSnapshot {
@@ -200,13 +205,15 @@ export interface WorkspaceSnapshot {
 }
 ```
 
-`PaneLifecycle` replaces the lossy string status in the controller. The OpenTUI adapter projects it to the existing text:
+The private controller state adds the owned `ProcessRun` directly to `Running` and `Cleaning`; snapshots project it away. This makes resource ownership part of the state machine rather than a parallel map. `Cleaning.target` records the terminal outcome before cleanup begins, so a failed attempt can retain both ownership and the exact result to restore.
+
+The OpenTUI adapter projects `PaneLifecycle` to text:
 
 ```ts
 function renderStatus(lifecycle: PaneLifecycle): string
 ```
 
-The projection returns `idle`, `starting`, `running`, `stopping`, `stopped`, `succeeded`, `failed (<code>)`, or `failed` for start, runtime, and cleanup failures. No new user-visible status is introduced.
+The projection returns `idle`, `starting`, `running`, `stopping`, `stopped`, `succeeded`, `failed (<code>)`, `failed` for start and runtime failures, or `cleanup failed` when the controller still owns a run after failed cleanup. Natural and runtime completion visibly enter `stopping` while PTY resources are being cleaned; a selected cleanup failure also replaces the navigation footer with explicit retry-only and retry-and-restart actions.
 
 ## Types, Interfaces, and APIs
 
@@ -284,7 +291,7 @@ export interface CleanupFailure {
   readonly run: RunId
   readonly operation: string
   readonly processGroupId?: number
-  readonly priorExitCode?: number
+  readonly target: Exclude<PaneOutcome, { readonly _tag: 'Idle' | 'StartFailed' }>
 }
 
 export interface WorkspaceShutdownError {
@@ -415,10 +422,10 @@ OpenTUI input/resize
 
 ```text
 WorkspaceCommand.stop/restart
-  -> snapshot: Stopping
+  -> snapshot: Cleaning(target = Stopped, cleanup = Pending)
   -> current ProcessRun.cleanup
   -> wait for cleanup completion
-  -> snapshot: Stopped
+  -> snapshot: Ready(outcome = Stopped)
   -> restart only: dispatch next start with RunId + 1
 ```
 
@@ -428,8 +435,9 @@ WorkspaceCommand.stop/restart
 ProcessRun.awaitExit
   -> exit code
   -> generation check
-  -> cleanup PTY resources without reclassifying manual stop
-  -> snapshot: Succeeded | Failed(Exited)
+  -> snapshot: Cleaning(target = Succeeded | Exited | RuntimeFailed)
+  -> cleanup PTY resources; explicit manual stop may retarget to Stopped
+  -> snapshot: Ready(outcome = target)
   -> selected pane leaves input mode
 ```
 
@@ -439,11 +447,12 @@ ProcessRun.awaitExit
 ProcessDriver.start failure
   -> adapter cleans partial resources
   -> controller verifies generation
-  -> snapshot: Failed(StartFailed)
+  -> snapshot: Ready(StartFailed)
   -> other panes continue
 
 single-pane cleanup failure
-  -> snapshot: Failed(CleanupFailed)
+  -> snapshot: Cleaning(target, Failed)
+  -> controller retains the ProcessRun and exact target outcome
   -> affected pane cannot start again
   -> other panes remain usable
 

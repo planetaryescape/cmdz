@@ -45,6 +45,7 @@ export interface ProcessRun {
   readonly write: (bytes: Uint8Array) => Effect.Effect<void, ProcessIoError>
   readonly resize: (size: TerminalSize) => Effect.Effect<void, ProcessIoError>
   readonly awaitExit: Effect.Effect<number, ProcessRuntimeError>
+  /** Releases this run's resources; repeated or concurrent evaluations must safely coalesce. */
   readonly cleanup: Effect.Effect<void, ProcessCleanupError>
 }
 

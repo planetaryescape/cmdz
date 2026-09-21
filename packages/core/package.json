@@ -4,6 +4,7 @@
   "type": "module",
   "exports": {
     "./process-driver": "./src/process-driver.ts",
+    "./testing": "./src/testing/fake-process-driver.ts",
     "./workspace": "./src/workspace.ts",
     "./workspace-definition": "./src/workspace-definition.ts",
     "./workspace-runtime": "./src/workspace-runtime.ts"
