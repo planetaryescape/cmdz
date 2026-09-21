@@ -93,7 +93,7 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
     paddingX: 1,
     border: ['bottom'],
     borderColor: theme.border,
-    backgroundColor: theme.surface,
+    backgroundColor: theme.canvas,
   })
   const chromeSpacer = new BoxRenderable(renderer, { flexGrow: 1 })
   const chromeTitle = new TextRenderable(renderer, {
@@ -224,7 +224,7 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
     renderer.setBackgroundColor(theme.canvas)
     frame.backgroundColor = theme.canvas
     frame.borderColor = theme.border
-    chrome.backgroundColor = theme.surface
+    chrome.backgroundColor = theme.canvas
     chrome.borderColor = theme.border
     chromeTitle.fg = theme.muted
     sidebar.backgroundColor = theme.surface
@@ -245,8 +245,8 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
     sidebar.width = renderer.terminalWidth < 58 ? 20 : 27
     hint.visible = snapshot.sidebarVisible && !help.visible
     hint.content = input
-      ? t`${fg(theme.muted)('Ctrl-Z')} ${fg(theme.muted)('nav')}   ${fg(theme.accent)('?')} ${fg(theme.muted)('help')}`
-      : t`${fg(theme.accent)('j/k')} ${fg(theme.muted)('move')}   ${fg(theme.accent)('?')} ${fg(theme.muted)('help')}`
+      ? t`${fg(theme.accent)('ctrl-z')} ${fg(theme.muted)('nav')}   ${fg(theme.accent)('ctrl-c')} ${fg(theme.muted)('stop')}   ${fg(theme.accent)('?')} ${fg(theme.muted)('help')}`
+      : t`${fg(theme.accent)('q')} ${fg(theme.muted)('quit')}   ${fg(theme.accent)('?')} ${fg(theme.muted)('help')}`
     for (const child of sidebar.getChildren()) sidebar.remove(child)
     for (const { key } of sections) {
       const sectionPanes = panes.filter((pane) => sectionForPane(pane) === key)
