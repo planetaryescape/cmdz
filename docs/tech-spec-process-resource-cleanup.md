@@ -2,19 +2,19 @@
 
 ## Summary
 
-Keep the workspace controller as the owner of process runs and its Effect scope as the final cleanup boundary. Make the POSIX process-group release verify the *group*, not merely its leader, and make view setup failures use the same typed shutdown path as a normal quit. Preserve explicit, retryable cleanup: a failed release must remain observable as `PaneCleanup.Failed` and must not be mistaken for a closed resource.
+Keep the workspace controller as the owner of process runs and its Effect scope as the final cleanup boundary. Make the POSIX process-group release verify the _group_, not merely its leader, and make view setup failures use the same typed shutdown path as a normal quit. Preserve explicit, retryable cleanup: a failed release must remain observable as `PaneCleanup.Failed` and must not be mistaken for a closed resource.
 
 ## Context / Current State
 
 - `terminalSession` acquires the OpenTUI renderer with `Effect.acquireRelease`; `runWorkspace` and `renderWorkspaceView` run inside `Effect.scoped`.
 - `createWorkspaceController` registers `shutdown` with `Effect.addFinalizer`, and forks each process watcher into the controller scope. Its `ProcessRun.cleanup` operation is serialized, retryable, and reflected in pane state. The production driver is in `@cmdz/cli`; `@cmdz/core` has no Bun or OpenTUI dependency.
-- `startPty` sends `SIGTERM` to the process group, waits up to three seconds for `child.exited`, and sends `SIGKILL` only if that *leader* has not exited. A TERM-ignoring group member can survive a promptly exiting leader. The README currently promises a force-kill of remaining members, which the implementation does not establish.
+- `startPty` sends `SIGTERM` to the process group, waits up to three seconds for `child.exited`, and sends `SIGKILL` only if that _leader_ has not exited. A TERM-ignoring group member can survive a promptly exiting leader. The README currently promises a force-kill of remaining members, which the implementation does not establish.
 - `renderWorkspaceView` wraps only its action loop with `Effect.onExit(() => runtime.shutdown)`. If `runtime.initialize` or subsequent setup fails, the controller scope still runs its shutdown finalizer, but that finalizer logs and absorbs `WorkspaceShutdownError`; the CLI cannot format its per-pane diagnostic in that path.
 - The public driver contract is not scope-typed. In production it is called only by the scoped controller. Direct driver calls in tests clean up explicitly; adding a scoped requirement to `ProcessDriver.start` would change the internal package API and its fake.
 
 ## Goals
 
-1. A successful release means the owned process group is no longer present, even when its leader exited before its descendants.
+1. A successful release means the owned process group has no live members, even when its leader exited before its descendants. Zombie-only groups count as released because they cannot execute or receive signals while awaiting reaping.
 2. A failed release retains the run for explicit stop retry or controller shutdown and reports a typed cleanup failure with its process group ID.
 3. A failure during view initialization or later view execution attempts shutdown and exposes `WorkspaceShutdownError` to `main.ts` when cleanup fails.
 4. Session interruption still closes listeners and renderer after process cleanup; natural exit, stop, restart, and repeated shutdown keep their current observable behavior.
@@ -31,7 +31,7 @@ Keep the workspace controller as the owner of process runs and its Effect scope 
 - `ProcessRun.cleanup` coalesces concurrent calls and is idempotent after success; a failure does not mark it cleaned.
 - Cleanup tries every pane on shutdown and aggregates failures; `shutdown` remains memoized.
 - An Effect scope guarantees a finalizer is **attempted**, not that an OS release succeeds. A failed release must not be hidden by closing a scope.
-- Group-existence checks are platform operations; only `ESRCH` means absent. Other errors are typed cleanup failures. A bounded verification wait must not loop forever during signal interruption.
+- Group-existence checks are platform operations. Linux uses a signal-zero probe where only `ESRCH` means absent; macOS inspects the process table because Bun rejects negative-PGID probes there. Other errors are typed cleanup failures. A bounded verification wait must not loop forever during signal interruption.
 - Preserve existing spans (`process.release`, `terminal.release`, `terminal.session`), safe logs, and CLI shutdown diagnostics. Do not log command text or environment values.
 
 ## Alternatives Considered
@@ -40,12 +40,13 @@ Keep the workspace controller as the owner of process runs and its Effect scope 
 
 ```ts
 interface ProcessDriverService {
-  readonly start: (request: ProcessStartRequest) =>
-    Effect.Effect<ProcessRun, ProcessStartError, Scope.Scope>
+  readonly start: (
+    request: ProcessStartRequest,
+  ) => Effect.Effect<ProcessRun, ProcessStartError, Scope.Scope>
 }
 ```
 
-`Effect.acquireRelease` would register `run.cleanup` in the workspace scope. This prevents an unmanaged direct caller but does not close a run at stop/restart: the workspace scope lasts longer. Its finalizer can also retry a failed cleanup *after* the controller has already reported a failure, making the reported state ambiguous. Callers, the recording fake, and finalizer ordering would all change.
+`Effect.acquireRelease` would register `run.cleanup` in the workspace scope. This prevents an unmanaged direct caller but does not close a run at stop/restart: the workspace scope lasts longer. Its finalizer can also retry a failed cleanup _after_ the controller has already reported a failure, making the reported state ambiguous. Callers, the recording fake, and finalizer ordering would all change.
 
 ### Option 2: One child `Scope` per process run
 
@@ -135,7 +136,7 @@ stop / natural exit / restart / quit / signal
   -> ProcessRun.cleanup under existing semaphore
   -> SIGTERM(-pgid)
   -> bounded wait for leader and check group presence
-  -> if group persists: SIGKILL(-pgid), bounded check for group absence
+  -> if live group members persist: SIGKILL(-pgid), bounded check for their absence
   -> wait for leader if needed; bounded PTY drain; close terminal
   -> success: pane Ready, restart permitted; scope eventually closes
 
@@ -162,7 +163,7 @@ Ensure a failed probe is not treated as an absent group. The existing `Effect.en
 
 ### Retry / Cancellation / Idempotency Flow
 
-`startPty` remains uninterruptible across spawn and handoff, so a successful spawn cannot escape without becoming a controller-owned run. The controller's shutdown effect remains uninterruptible and cached. `ProcessRun.cleanup` stays serialized under its semaphore; only after confirmed group absence and PTY drain does it set `cleaned = true`. Failed cleanup retains ownership and can be retried. Scope closure attempts shutdown even if the view fails before explicit shutdown is reached.
+`startPty` remains uninterruptible across spawn and handoff, so a successful spawn cannot escape without becoming a controller-owned run. The controller's shutdown effect remains uninterruptible and cached. `ProcessRun.cleanup` stays serialized under its semaphore; only after confirming no live group members remain and draining the PTY does it set `cleaned = true`. Failed cleanup retains ownership and can be retried. Scope closure attempts shutdown even if the view fails before explicit shutdown is reached.
 
 ### Observability Flow
 
@@ -170,14 +171,14 @@ Keep the existing `process.release` span and `Workspace cleanup failed` log. Ann
 
 ## Files to Add / Change / Delete
 
-| File | Responsibility |
-| --- | --- |
-| `packages/cli/src/pty-process.ts` | Verify the entire group after TERM, escalate when any member remains, bound post-KILL verification, preserve retryable typed failures and PTY drain. |
-| `packages/tui/src/workspace-view.ts` | Cover initialization and the action loop with explicit shutdown reporting while preserving listener and fiber scope ordering. |
-| `packages/cli/src/pty-process.test.ts` | Real Bun/POSIX adapter behavior when leader exits but a group member ignores TERM; failed-probe/timeout behavior where reproducible. |
-| `packages/core/src/workspace.test.ts` | Existing fake-driver stop, retry, interrupt, shutdown, and aggregation coverage; extend only if changed behavior reveals a gap. |
-| `packages/cli/src/cleanup-retry.test.ts` | View-level initialization failure plus cleanup failure through the recording driver and typed exit, if this is the least-coupled test entrypoint. |
-| `README.md` | Align the process-group cleanup description with the verified behavior and bounded failure case. |
+| File                                     | Responsibility                                                                                                                                       |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/cli/src/pty-process.ts`        | Verify the entire group after TERM, escalate when any member remains, bound post-KILL verification, preserve retryable typed failures and PTY drain. |
+| `packages/tui/src/workspace-view.ts`     | Cover initialization and the action loop with explicit shutdown reporting while preserving listener and fiber scope ordering.                        |
+| `packages/cli/src/pty-process.test.ts`   | Real Bun/POSIX adapter behavior when leader exits but a group member ignores TERM; failed-probe/timeout behavior where reproducible.                 |
+| `packages/core/src/workspace.test.ts`    | Existing fake-driver stop, retry, interrupt, shutdown, and aggregation coverage; extend only if changed behavior reveals a gap.                      |
+| `packages/cli/src/cleanup-retry.test.ts` | View-level initialization failure plus cleanup failure through the recording driver and typed exit, if this is the least-coupled test entrypoint.    |
+| `README.md`                              | Align the process-group cleanup description with the verified behavior and bounded failure case.                                                     |
 
 No new production files, package dependencies, schema, database changes, or deletions are expected.
 
@@ -191,6 +192,6 @@ No new production files, package dependencies, schema, database changes, or dele
 ## Risks and Open Questions
 
 - **Production risk:** Changed group probing can lengthen stop/quit by a bounded interval and can turn a previously reported success into a cleanup failure when descendants remain. That is intentional and needs explicit approval before implementation. A smaller first step is the real-PTY regression test plus group verification only; keep any broader driver API change separate.
-- **OS semantics:** Confirm whether the supported macOS/Linux test environments ever retain a zombie process-group member long enough that `kill(-pgid, 0)` reports presence after KILL. A bounded failure is preferable to a false success; tune the verification deadline from measured runs.
+- **OS semantics:** Linux signal-zero probes may report a zombie-only process group as present until it is reaped, while the macOS process-table probe treats zombie-only groups as released. If Linux runners retain such groups beyond the bounded verification deadline, align its probe with the live-member semantics without weakening errors for genuinely live descendants.
 - **Effect cause composition:** Confirm `Effect.onExit` behavior for an initialization failure followed by a failing shutdown in the pinned release candidate, so the original failure is not lost and the CLI still finds `WorkspaceShutdownError`.
 - **Scope-typed driver API:** Not part of this refactor. Revisit only if another production caller starts PTYs outside `createWorkspaceController`; the present caller already supplies a scoped owner and explicit retryable cleanup.

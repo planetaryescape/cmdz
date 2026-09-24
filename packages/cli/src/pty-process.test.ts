@@ -161,3 +161,53 @@ test('forces a TERM-ignoring process group down and deduplicates cleanup', async
   const descendant = Bun.spawnSync(['ps', '-o', 'stat=', '-p', String(descendantPid)])
   expect(descendant.stdout.toString().trim().replace(/^Z.*$/, '')).toBe('')
 }, 8000)
+
+test('force-kills a TERM-ignoring group member after its leader exits', async () => {
+  let leaderPid = 0
+  let descendantPid = 0
+  try {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const ready = yield* Deferred.make<void>()
+        let output = ''
+        const run = yield* makePtyProcessDriver().start({
+          name: 'exited-leader',
+          run: 1,
+          command: [
+            '/bin/sh',
+            '-c',
+            "trap '' TERM HUP; while :; do sleep 1; done </dev/null >/dev/null 2>&1 & descendant=$!; printf '%s,%s\\n' $$ $descendant",
+          ],
+          cwd: process.cwd(),
+          env: process.env,
+          size: { columns: 80, rows: 24 },
+          output: (bytes) => {
+            output += new TextDecoder().decode(bytes)
+            const match = output.match(/(\d+),(\d+)/)
+            if (match) {
+              leaderPid = Number(match[1])
+              descendantPid = Number(match[2])
+              Effect.runSync(Deferred.succeed(ready, undefined))
+            }
+          },
+        })
+        yield* Deferred.await(ready)
+        expect(yield* run.awaitExit).toBe(0)
+        expect(() => process.kill(-leaderPid, 0)).not.toThrow()
+        yield* run.cleanup
+      }),
+    )
+
+    expect(leaderPid).toBeGreaterThan(0)
+    expect(descendantPid).toBeGreaterThan(0)
+    expect(() => process.kill(-leaderPid, 0)).toThrow()
+  } finally {
+    if (leaderPid > 0) {
+      try {
+        process.kill(-leaderPid, 'SIGKILL')
+      } catch {
+        // The expected implementation has already removed the process group.
+      }
+    }
+  }
+}, 8000)

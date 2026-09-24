@@ -388,15 +388,15 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
       }),
   )
 
-  const initialSizes: Record<string, TerminalSize> = {}
-  for (const pane of panes) initialSizes[pane.definition.name] = pane.size()
-  yield* runtime.initialize(initialSizes)
-  if (renderer.terminalWidth < 72 && pendingSidebarVisible) {
-    pendingSidebarVisible = false
-    offer({ type: 'setSidebarVisible', visible: false })
-  }
-  yield* Effect.logInfo('Process workspace ready')
   const run = Effect.gen(function* () {
+    const initialSizes: Record<string, TerminalSize> = {}
+    for (const pane of panes) initialSizes[pane.definition.name] = pane.size()
+    yield* runtime.initialize(initialSizes)
+    if (renderer.terminalWidth < 72 && pendingSidebarVisible) {
+      pendingSidebarVisible = false
+      offer({ type: 'setSidebarVisible', visible: false })
+    }
+    yield* Effect.logInfo('Process workspace ready')
     while (true) {
       const action = yield* Queue.take(actions)
       if (action.type === 'quit') return
