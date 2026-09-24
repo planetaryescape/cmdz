@@ -96,7 +96,7 @@ All generic anti-slop rules and its Effect rule are enabled. See [lint provenanc
 
 `@cmdz/core` is the headless source of truth for command lifecycle, run generations, selection, input mode, sidebar state, and shutdown. `@cmdz/tui` translates OpenTUI input into controller commands and renders snapshots and ordered output events. `@cmdz/cli` implements the production process driver with Bun PTYs and POSIX process groups, and composes the runtime. OpenTUI's built-in `EmbeddedTerminalRenderable` handles ANSI parsing, input encoding, and terminal resizing. No PTY or parser dependency was added. See [workspace architecture](docs/monorepo-architecture.md).
 
-On release, signal the owned process group, wait up to three seconds for the leader, then check the group itself and force-kill any remaining members. Verify group removal and drain pending PTY output with bounded waits before reporting success; an unconfirmed release remains a retryable cleanup failure. Deliberately detached descendants are outside this process-group ownership model.
+On release, signal the owned process group, wait up to three seconds for the leader, then check the group itself and force-kill any remaining live members. Verify that no live group members remain and drain pending PTY output with bounded waits before reporting success; an unconfirmed release remains a retryable cleanup failure. Deliberately detached descendants are outside this process-group ownership model.
 
 ```sh
 bun run test

@@ -34,13 +34,25 @@ const signalGroup = (processGroupId: number, signal: NodeJS.Signals) =>
     catch: () => new ProcessCleanupError({ operation: `signal-${signal}`, processGroupId }),
   })
 
+const darwinGroupPresence = (processGroupId: number): GroupPresence => {
+  const processes = Bun.spawnSync(['/bin/ps', '-axo', 'pgid=,stat='])
+  if (processes.exitCode !== 0) throw new Error('Could not inspect process groups')
+
+  for (const line of processes.stdout.toString().split('\n')) {
+    const [group, status] = line.trim().split(/\s+/)
+    if (Number(group) === processGroupId && status && !status.startsWith('Z')) return 'present'
+  }
+  return 'absent'
+}
+
 const groupPresence = (processGroupId: number): Effect.Effect<GroupPresence, ProcessCleanupError> =>
   Effect.try({
     try: () => {
+      // Bun 1.4 rejects every negative-PGID process.kill probe on Darwin.
+      // Zombies cannot execute or receive signals, so a zombie-only group is released.
+      if (process.platform === 'darwin') return darwinGroupPresence(processGroupId)
       try {
-        // Bun 1.4 rejects signal 0 on Darwin. Repeating SIGTERM is safe during
-        // release because any remaining member has already ignored the first one.
-        process.kill(-processGroupId, process.platform === 'darwin' ? 'SIGTERM' : 0)
+        process.kill(-processGroupId, 0)
         return 'present' as const
       } catch (error) {
         if (error instanceof Error && 'code' in error && error.code === 'ESRCH')
@@ -53,8 +65,6 @@ const groupPresence = (processGroupId: number): Effect.Effect<GroupPresence, Pro
 
 const waitForGroupAbsence = (processGroupId: number) =>
   Effect.gen(function* () {
-    // Zombies still belong to the group until reaped, so they intentionally keep
-    // cleanup unresolved rather than allowing a false successful release.
     while ((yield* groupPresence(processGroupId)) === 'present') yield* Effect.sleep('25 millis')
   }).pipe(
     Effect.timeoutOption(postKillTimeout),
