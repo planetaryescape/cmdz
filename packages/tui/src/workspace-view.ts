@@ -93,13 +93,12 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
     paddingX: 1,
     border: ['bottom'],
     borderColor: theme.border,
-    backgroundColor: theme.surface,
+    backgroundColor: theme.canvas,
   })
-  const trafficLights = new TextRenderable(renderer, { id: 'traffic-lights', width: 10, height: 1 })
   const chromeSpacer = new BoxRenderable(renderer, { flexGrow: 1 })
   const chromeTitle = new TextRenderable(renderer, {
     id: 'chrome-title',
-    width: 24,
+    width: 32,
     height: 1,
     fg: theme.muted,
     truncate: true,
@@ -113,7 +112,7 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
     borderColor: theme.border,
     backgroundColor: theme.surface,
   })
-  const body = new BoxRenderable(renderer, { id: 'body', flexGrow: 1, padding: 1 })
+  const body = new BoxRenderable(renderer, { id: 'body', flexGrow: 1 })
   const emptyState = new BoxRenderable(renderer, {
     id: 'empty-state',
     position: 'absolute',
@@ -128,7 +127,15 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
     id: 'empty-state-text',
     fg: theme.muted,
   })
-  chrome.add(trafficLights)
+  const hint = new TextRenderable(renderer, {
+    id: 'sidebar-hint',
+    position: 'absolute',
+    left: 2,
+    bottom: 1,
+    zIndex: 3,
+    wrapMode: 'none',
+    truncate: true,
+  })
   chrome.add(chromeSpacer)
   chrome.add(chromeTitle)
   frame.add(chrome)
@@ -136,6 +143,7 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
   row.add(sidebar)
   row.add(body)
   emptyState.add(emptyStateText)
+  frame.add(hint)
   renderer.root.add(frame)
   const help = createShortcutHelp(renderer, theme)
   renderer.root.add(help)
@@ -178,8 +186,9 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
       new TextRenderable(renderer, {
         id: `section-${key}`,
         width: '100%',
-        height: 2,
-        paddingLeft: 1,
+        height: 1,
+        marginTop: 1,
+        paddingLeft: 2,
         content: label,
         fg: theme.muted,
         attributes: 2,
@@ -197,9 +206,7 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
     const box = new BoxRenderable(renderer, {
       id: `sidebar-${pane.index}`,
       width: '100%',
-      height: 3,
-      border: true,
-      borderColor: theme.surface,
+      height: 1,
       backgroundColor: theme.surface,
       onMouseDown: (event) => {
         if (help.visible || snapshot.mode === 'input') return
@@ -217,7 +224,7 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
     renderer.setBackgroundColor(theme.canvas)
     frame.backgroundColor = theme.canvas
     frame.borderColor = theme.border
-    chrome.backgroundColor = theme.surface
+    chrome.backgroundColor = theme.canvas
     chrome.borderColor = theme.border
     chromeTitle.fg = theme.muted
     sidebar.backgroundColor = theme.surface
@@ -232,11 +239,14 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
     const selectedState = selectedSnapshot()
     if (!selected || !selectedState || chromeTitle.isDestroyed || sidebar.isDestroyed) return
     const input = snapshot.mode === 'input' && selected.terminal.focused
-    trafficLights.content = t`${fg(theme.danger)('●')} ${fg(theme.pending)('●')} ${fg(theme.info)('●')}`
     const title = `${input ? 'INPUT · ' : ''}${selected.definition.title} · cmdz.ts`
     chromeTitle.content = t`${fg(input ? theme.accent : theme.muted)(title)}`
     sidebar.visible = snapshot.sidebarVisible
     sidebar.width = renderer.terminalWidth < 58 ? 20 : 27
+    hint.visible = snapshot.sidebarVisible && !help.visible
+    hint.content = input
+      ? t`${fg(theme.accent)('ctrl-z')} ${fg(theme.muted)('nav')}   ${fg(theme.accent)('ctrl-c')} ${fg(theme.muted)('stop')}   ${fg(theme.accent)('?')} ${fg(theme.muted)('help')}`
+      : t`${fg(theme.accent)('q')} ${fg(theme.muted)('quit')}   ${fg(theme.accent)('?')} ${fg(theme.muted)('help')}`
     for (const child of sidebar.getChildren()) sidebar.remove(child)
     for (const { key } of sections) {
       const sectionPanes = panes.filter((pane) => sectionForPane(pane) === key)
@@ -248,12 +258,12 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
         if (!sidebarRow) continue
         const selectedRow = pane === selected
         sidebarRow.box.backgroundColor = selectedRow ? theme.selected : theme.surface
-        sidebarRow.box.borderColor = selectedRow ? theme.accent : theme.surface
         const color = statusColor(key, theme)
+        const marker = selectedRow ? fg(theme.accent)('›') : fg(theme.surface)('›')
         const title = selectedRow
-          ? bold(fg(theme.text)(pane.definition.title))
+          ? bold(fg(theme.accent)(pane.definition.title))
           : fg(key === 'idle' ? theme.muted : theme.text)(pane.definition.title)
-        sidebarRow.text.content = t`${fg(color)('●')} ${title}`
+        sidebarRow.text.content = t`${marker} ${fg(color)('●')} ${title}`
         sidebar.add(sidebarRow.box)
       }
     }

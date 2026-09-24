@@ -129,7 +129,12 @@ function startPty(
         Bun.spawn([...request.command], {
           detached: true,
           cwd: request.cwd,
-          env: { ...process.env, ...request.env, TERM: 'xterm-256color' },
+          env: {
+            TERM: process.env.TERM ?? 'xterm-256color',
+            COLORTERM: process.env.COLORTERM ?? 'truecolor',
+            ...process.env,
+            ...request.env,
+          },
           terminal: {
             cols: initialSize.columns,
             rows: initialSize.rows,
