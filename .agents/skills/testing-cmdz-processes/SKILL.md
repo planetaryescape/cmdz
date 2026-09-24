@@ -56,7 +56,11 @@ The harness writes representative navigation, input, and help states to:
 ├── input.svg
 ├── input.png
 ├── help.svg
-└── help.png
+├── help.png
+├── compact-navigation.svg
+├── compact-navigation.png
+├── compact-help.svg
+└── compact-help.png
 ```
 
 Pass another output directory when needed:
@@ -65,7 +69,7 @@ Pass another output directory when needed:
 bun run capture:tui .amp/in/artifacts/my-review
 ```
 
-The harness uses OpenTUI's deterministic renderer but runs the real `runWorkspace` composition and production PTY driver. It autostarts a real Demo child, sends real terminal input, and waits for semantic screen text before each capture.
+The harness uses OpenTUI's deterministic renderer but runs the real `runWorkspace` composition and production PTY driver. It autostarts a real Demo child, sends real terminal input, resizes to a compact viewport, and waits for semantic screen text before each capture.
 
 After capturing:
 

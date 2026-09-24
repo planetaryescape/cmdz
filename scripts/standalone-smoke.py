@@ -74,25 +74,25 @@ def trial(binary, project, mode):
         text(b"INPUT")
         os.write(master, b"hello\r")
         text(b"ECHO:hello")
-        text(b"DIMS:28 78")
+        text(b"DIMS:26 71")
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 34, 110, 0, 0))
         child.send_signal(signal.SIGWINCH)
-        text(b"RESIZED:32 88")
+        text(b"RESIZED:30 81")
         os.write(master, b"resize\r")
         text(b"ECHO:resize")
         os.write(master, b"\x1ah")
-        text(b"RESIZED:32 110")
+        text(b"RESIZED:30 108")
         os.write(master, b"\r")
         del output[:]
         text(b"INPUT")
         os.write(master, b"wide\r")
         text(b"ECHO:wide")
         if mode == "quit":
+            del output[:]
             os.write(master, b"\x1a")
-            text(b"NAVIGATION")
+            text(b"cmdz.ts")
             del output[:]
             os.write(master, b"x")
-            text(b"stopped")
             wait_for(
                 lambda: not Path(f"/proc/{owned_pid}").exists()
                 if sys.platform.startswith("linux")
@@ -102,7 +102,6 @@ def trial(binary, project, mode):
             previous_pid = owned_pid
             del output[:]
             os.write(master, b"r")
-            text(b"running")
             wait_for(
                 lambda: (pid := child_pid()) is not None and pid != previous_pid,
                 "new process",
