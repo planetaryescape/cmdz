@@ -2,13 +2,13 @@
 
 ## Summary
 
-Keep the workspace controller as the owner of process runs and its Effect scope as the final cleanup boundary. Make the POSIX process-group release verify the *group*, not merely its leader, and make view setup failures use the same typed shutdown path as a normal quit. Preserve explicit, retryable cleanup: a failed release must remain observable as `PaneCleanup.Failed` and must not be mistaken for a closed resource.
+Keep the workspace controller as the owner of process runs and its Effect scope as the final cleanup boundary. Make the POSIX process-group release verify the _group_, not merely its leader, and make view setup failures use the same typed shutdown path as a normal quit. Preserve explicit, retryable cleanup: a failed release must remain observable as `PaneCleanup.Failed` and must not be mistaken for a closed resource.
 
 ## Context / Current State
 
 - `terminalSession` acquires the OpenTUI renderer with `Effect.acquireRelease`; `runWorkspace` and `renderWorkspaceView` run inside `Effect.scoped`.
 - `createWorkspaceController` registers `shutdown` with `Effect.addFinalizer`, and forks each process watcher into the controller scope. Its `ProcessRun.cleanup` operation is serialized, retryable, and reflected in pane state. The production driver is in `@cmdz/cli`; `@cmdz/core` has no Bun or OpenTUI dependency.
-- `startPty` sends `SIGTERM` to the process group, waits up to three seconds for `child.exited`, and sends `SIGKILL` only if that *leader* has not exited. A TERM-ignoring group member can survive a promptly exiting leader. The README currently promises a force-kill of remaining members, which the implementation does not establish.
+- `startPty` sends `SIGTERM` to the process group, waits up to three seconds for `child.exited`, and sends `SIGKILL` only if that _leader_ has not exited. A TERM-ignoring group member can survive a promptly exiting leader. The README currently promises a force-kill of remaining members, which the implementation does not establish.
 - `renderWorkspaceView` wraps only its action loop with `Effect.onExit(() => runtime.shutdown)`. If `runtime.initialize` or subsequent setup fails, the controller scope still runs its shutdown finalizer, but that finalizer logs and absorbs `WorkspaceShutdownError`; the CLI cannot format its per-pane diagnostic in that path.
 - The public driver contract is not scope-typed. In production it is called only by the scoped controller. Direct driver calls in tests clean up explicitly; adding a scoped requirement to `ProcessDriver.start` would change the internal package API and its fake.
 
@@ -40,12 +40,13 @@ Keep the workspace controller as the owner of process runs and its Effect scope 
 
 ```ts
 interface ProcessDriverService {
-  readonly start: (request: ProcessStartRequest) =>
-    Effect.Effect<ProcessRun, ProcessStartError, Scope.Scope>
+  readonly start: (
+    request: ProcessStartRequest,
+  ) => Effect.Effect<ProcessRun, ProcessStartError, Scope.Scope>
 }
 ```
 
-`Effect.acquireRelease` would register `run.cleanup` in the workspace scope. This prevents an unmanaged direct caller but does not close a run at stop/restart: the workspace scope lasts longer. Its finalizer can also retry a failed cleanup *after* the controller has already reported a failure, making the reported state ambiguous. Callers, the recording fake, and finalizer ordering would all change.
+`Effect.acquireRelease` would register `run.cleanup` in the workspace scope. This prevents an unmanaged direct caller but does not close a run at stop/restart: the workspace scope lasts longer. Its finalizer can also retry a failed cleanup _after_ the controller has already reported a failure, making the reported state ambiguous. Callers, the recording fake, and finalizer ordering would all change.
 
 ### Option 2: One child `Scope` per process run
 
@@ -170,14 +171,14 @@ Keep the existing `process.release` span and `Workspace cleanup failed` log. Ann
 
 ## Files to Add / Change / Delete
 
-| File | Responsibility |
-| --- | --- |
-| `packages/cli/src/pty-process.ts` | Verify the entire group after TERM, escalate when any member remains, bound post-KILL verification, preserve retryable typed failures and PTY drain. |
-| `packages/tui/src/workspace-view.ts` | Cover initialization and the action loop with explicit shutdown reporting while preserving listener and fiber scope ordering. |
-| `packages/cli/src/pty-process.test.ts` | Real Bun/POSIX adapter behavior when leader exits but a group member ignores TERM; failed-probe/timeout behavior where reproducible. |
-| `packages/core/src/workspace.test.ts` | Existing fake-driver stop, retry, interrupt, shutdown, and aggregation coverage; extend only if changed behavior reveals a gap. |
-| `packages/cli/src/cleanup-retry.test.ts` | View-level initialization failure plus cleanup failure through the recording driver and typed exit, if this is the least-coupled test entrypoint. |
-| `README.md` | Align the process-group cleanup description with the verified behavior and bounded failure case. |
+| File                                     | Responsibility                                                                                                                                       |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/cli/src/pty-process.ts`        | Verify the entire group after TERM, escalate when any member remains, bound post-KILL verification, preserve retryable typed failures and PTY drain. |
+| `packages/tui/src/workspace-view.ts`     | Cover initialization and the action loop with explicit shutdown reporting while preserving listener and fiber scope ordering.                        |
+| `packages/cli/src/pty-process.test.ts`   | Real Bun/POSIX adapter behavior when leader exits but a group member ignores TERM; failed-probe/timeout behavior where reproducible.                 |
+| `packages/core/src/workspace.test.ts`    | Existing fake-driver stop, retry, interrupt, shutdown, and aggregation coverage; extend only if changed behavior reveals a gap.                      |
+| `packages/cli/src/cleanup-retry.test.ts` | View-level initialization failure plus cleanup failure through the recording driver and typed exit, if this is the least-coupled test entrypoint.    |
+| `README.md`                              | Align the process-group cleanup description with the verified behavior and bounded failure case.                                                     |
 
 No new production files, package dependencies, schema, database changes, or deletions are expected.
 
