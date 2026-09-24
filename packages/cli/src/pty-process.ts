@@ -12,7 +12,7 @@ import { Effect, Layer, Option, Result, Semaphore } from 'effect'
 
 type GroupPresence = 'present' | 'absent'
 
-const postKillTimeout = '1 second'
+const postKillTimeout = '3 seconds'
 
 interface TerminalPort {
   readonly columns: number
