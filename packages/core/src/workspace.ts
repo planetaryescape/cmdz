@@ -134,6 +134,7 @@ type InternalPaneLifecycle =
   | Extract<PaneLifecycle, { readonly _tag: 'Ready' | 'Starting' }>
   | (Extract<PaneLifecycle, { readonly _tag: 'Running' }> & {
       readonly process: ProcessRun
+      readonly interruptRequested: boolean
     })
   | (Extract<PaneLifecycle, { readonly _tag: 'Cleaning' }> & {
       readonly process: ProcessRun
@@ -157,6 +158,7 @@ const runningPane = (run: number, process: ProcessRun): InternalPaneLifecycle =>
   _tag: 'Running',
   run,
   process,
+  interruptRequested: false,
 })
 
 const cleaningPane = (
@@ -310,10 +312,15 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
             pane.lifecycle.process !== process
           )
             return false
+          const outcome =
+            pane.lifecycle.interruptRequested &&
+            (target._tag === 'Succeeded' || (target._tag === 'Exited' && target.exitCode === 130))
+              ? PaneOutcome.Stopped()
+              : target
           yield* setPaneLifecycle(
             name,
             run,
-            cleaningPane(run, process, target, PaneCleanup.Pending()),
+            cleaningPane(run, process, outcome, PaneCleanup.Pending()),
           )
           return true
         }),
@@ -518,8 +525,25 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
             (snapshot.selected !== command.name || snapshot.mode !== 'input'))
         )
           return yield* Effect.fail(commandError('paneNotRunning', command.name))
-        if (command.type === 'write') yield* pane.lifecycle.process.write(command.bytes)
-        else yield* pane.lifecycle.process.resize(command.size)
+        if (command.type === 'write') {
+          if (command.source === 'user') {
+            const run = pane.lifecycle.run
+            yield* SubscriptionRef.update(state, (current) =>
+              updatePane(current, command.name, (currentPane) =>
+                currentPane.lifecycle._tag === 'Running' && currentPane.lifecycle.run === run
+                  ? {
+                      ...currentPane,
+                      lifecycle: {
+                        ...currentPane.lifecycle,
+                        interruptRequested: command.bytes.includes(3),
+                      },
+                    }
+                  : currentPane,
+              ),
+            )
+          }
+          yield* pane.lifecycle.process.write(command.bytes)
+        } else yield* pane.lifecycle.process.resize(command.size)
         return toWorkspaceSnapshot(yield* SubscriptionRef.get(state))
       })
 

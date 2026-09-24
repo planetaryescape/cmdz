@@ -49,6 +49,65 @@ const awaitOutcome = (
     Stream.runDrain,
   )
 
+test('classifies an exiting Ctrl-C run as stopped but clears the intent on later input', async () => {
+  const outcomes = await Effect.runPromise(
+    Effect.gen(function* () {
+      const driver = makeRecordingProcessDriver()
+      const controller = yield* createWorkspaceController([definition('Web')]).pipe(
+        Effect.provide(driver.layer),
+      )
+      yield* controller.initialize({ Web: size })
+      yield* controller.dispatch({ type: 'start', name: 'Web', size })
+      yield* controller.dispatch({ type: 'enterInput', name: 'Web' })
+      yield* controller.dispatch({
+        type: 'write',
+        name: 'Web',
+        source: 'user',
+        bytes: Uint8Array.of(3),
+      })
+      yield* driver.process('Web', 1).exit(0)
+      yield* Fiber.join(yield* awaitOutcome(controller, 'Web', 'Stopped').pipe(Effect.forkScoped))
+      const interrupted = pane(yield* controller.snapshot, 'Web').lifecycle
+
+      yield* controller.dispatch({ type: 'start', name: 'Web', size })
+      yield* controller.dispatch({ type: 'enterInput', name: 'Web' })
+      yield* controller.dispatch({
+        type: 'write',
+        name: 'Web',
+        source: 'user',
+        bytes: Uint8Array.of(3),
+      })
+      yield* controller.dispatch({
+        type: 'write',
+        name: 'Web',
+        source: 'user',
+        bytes: Uint8Array.of(97),
+      })
+      yield* driver.process('Web', 2).exit(0)
+      yield* Fiber.join(yield* awaitOutcome(controller, 'Web', 'Succeeded').pipe(Effect.forkScoped))
+      const succeeded = pane(yield* controller.snapshot, 'Web').lifecycle
+
+      yield* controller.dispatch({ type: 'start', name: 'Web', size })
+      yield* controller.dispatch({ type: 'enterInput', name: 'Web' })
+      yield* controller.dispatch({
+        type: 'write',
+        name: 'Web',
+        source: 'user',
+        bytes: Uint8Array.of(3),
+      })
+      yield* driver.process('Web', 3).exit(7)
+      yield* Fiber.join(yield* awaitOutcome(controller, 'Web', 'Exited').pipe(Effect.forkScoped))
+      return [
+        renderStatus(interrupted),
+        renderStatus(succeeded),
+        renderStatus(pane(yield* controller.snapshot, 'Web').lifecycle),
+      ]
+    }).pipe(Effect.scoped),
+  )
+
+  expect(outcomes).toEqual(['stopped', 'succeeded', 'failed (7)'])
+})
+
 test('covers successful and manually stopped lifecycle transitions', async () => {
   const transitions = await Effect.runPromise(
     Effect.gen(function* () {

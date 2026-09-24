@@ -42,3 +42,19 @@ test('clicking an inactive terminal cannot enter input mode', async () => {
     await ui.close()
   }
 })
+
+test('Ctrl-C that exits a focused child shows it as stopped', async () => {
+  const ui = await createWorkspace([
+    { ...probe, command: `bun run ${import.meta.dir}/demo-command.ts` },
+  ])
+  try {
+    await ui.waitFor('cmdz demo')
+    ui.mockInput.pressEnter()
+    await ui.waitFor('INPUT')
+    ui.mockInput.pressCtrlC()
+    await ui.waitFor('STOPPED')
+    expect(ui.captureCharFrame()).not.toContain('SUCCEEDED')
+  } finally {
+    await ui.close()
+  }
+}, 10000)
