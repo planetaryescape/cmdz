@@ -1,4 +1,13 @@
-import type { WorkspaceShutdownError } from '@cmdz/core/workspace'
+import { WorkspaceShutdownError } from '@cmdz/core/workspace'
+import { Cause } from 'effect'
+
+export function findShutdownError(cause: Cause.Cause<unknown>) {
+  for (const reason of cause.reasons) {
+    if (Cause.isFailReason(reason) && reason.error instanceof WorkspaceShutdownError)
+      return reason.error
+  }
+  return undefined
+}
 
 export function formatShutdownDiagnostic(error: WorkspaceShutdownError) {
   const lines = ['cmdz could not clean up every process.']

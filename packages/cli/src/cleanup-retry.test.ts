@@ -1,11 +1,15 @@
 import { expect, test } from 'bun:test'
 
 import { makeRecordingProcessDriver } from '@cmdz/core/testing'
-import { createWorkspaceController } from '@cmdz/core/workspace'
+import {
+  WorkspaceCommandError,
+  WorkspaceShutdownError,
+  createWorkspaceController,
+} from '@cmdz/core/workspace'
 import type { WorkspaceDefinition } from '@cmdz/core/workspace-definition'
 import { renderWorkspaceView } from '@cmdz/tui/workspace-view'
 import { createTestRenderer } from '@opentui/core/testing'
-import { Effect } from 'effect'
+import { Cause, Effect, Exit } from 'effect'
 
 test('surfaces failed cleanup and supports retry-only and retry-restart actions', async () => {
   const ui = await createTestRenderer({ width: 100, height: 30, kittyKeyboard: false })
@@ -68,3 +72,50 @@ test('surfaces failed cleanup and supports retry-only and retry-restart actions'
     ui.renderer.destroy()
   }
 }, 10000)
+
+test('reports cleanup failure when initialization fails after starting a process', async () => {
+  const ui = await createTestRenderer({ width: 100, height: 30, kittyKeyboard: false })
+  const driver = makeRecordingProcessDriver()
+  const definition: WorkspaceDefinition = {
+    name: 'Demo',
+    title: 'Demo',
+    command: 'demo',
+    cwd: '/',
+    env: {},
+    autostart: true,
+  }
+  driver.failCleanup('Demo', 1, 2)
+
+  try {
+    const exit = await Effect.runPromise(
+      Effect.gen(function* () {
+        const controller = yield* createWorkspaceController([definition]).pipe(
+          Effect.provide(driver.layer),
+        )
+        const failingController = {
+          ...controller,
+          initialize: (sizes: Parameters<typeof controller.initialize>[0]) =>
+            controller
+              .initialize(sizes)
+              .pipe(
+                Effect.andThen(
+                  Effect.fail(new WorkspaceCommandError({ reason: 'workspaceAlreadyInitialized' })),
+                ),
+              ),
+        }
+        return yield* renderWorkspaceView(ui.renderer, [definition], failingController).pipe(
+          Effect.exit,
+        )
+      }).pipe(Effect.scoped),
+    )
+
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isSuccess(exit)) throw new Error('Expected initialization to fail')
+    const errors = exit.cause.reasons.filter(Cause.isFailReason).map((reason) => reason.error)
+    expect(errors.some((error) => error instanceof WorkspaceCommandError)).toBe(true)
+    expect(errors.some((error) => error instanceof WorkspaceShutdownError)).toBe(true)
+    expect(driver.process('Demo', 1).cleanupAttempts).toBe(1)
+  } finally {
+    ui.renderer.destroy()
+  }
+})

@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test'
 
-import { PaneOutcome, WorkspaceShutdownError } from '@cmdz/core/workspace'
+import { PaneOutcome, WorkspaceCommandError, WorkspaceShutdownError } from '@cmdz/core/workspace'
+import { Cause } from 'effect'
 
-import { formatShutdownDiagnostic } from './shutdown-diagnostic'
+import { findShutdownError, formatShutdownDiagnostic } from './shutdown-diagnostic'
 
 test('reports every unresolved process group without process data', () => {
   const diagnostic = formatShutdownDiagnostic(
@@ -30,4 +31,14 @@ test('reports every unresolved process group without process data', () => {
   expect(diagnostic).not.toContain('command')
   expect(diagnostic).not.toContain('environment')
   expect(diagnostic).not.toContain('output')
+})
+
+test('finds shutdown cleanup failure when another failure occurred first', () => {
+  const shutdown = new WorkspaceShutdownError({ failures: [] })
+  const cause = Cause.combine(
+    Cause.fail(new WorkspaceCommandError({ reason: 'workspaceAlreadyInitialized' })),
+    Cause.fail(shutdown),
+  )
+
+  expect(findShutdownError(cause)).toBe(shutdown)
 })
