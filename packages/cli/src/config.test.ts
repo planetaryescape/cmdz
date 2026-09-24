@@ -51,6 +51,7 @@ test('rejects malformed, empty, duplicate, and invalid directory definitions', a
     {},
     [],
     [{ name: 'Web', command: 1 }],
+    [{ name: 'Web', command: 'echo ok', autostrat: false }],
     [Command('Web', { command: ' ' })],
     [Command('Web', { command: 'echo ok', autostart: false, cwd: '/cmdz-missing-directory' })],
     [Command('Web', { command: 'echo ok' }), Command('Web', { command: 'echo duplicate' })],

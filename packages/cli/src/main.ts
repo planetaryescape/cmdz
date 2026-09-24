@@ -24,14 +24,19 @@ process.on('SIGINT', interrupt)
 process.on('SIGTERM', interrupt)
 
 try {
+  const validating = process.argv[2] === 'validate'
   const exit = await Effect.runPromiseExit(
-    loadConfig(process.argv[2] ?? 'cmdz.ts').pipe(
-      Effect.flatMap(terminalSession),
-      Effect.provide(telemetry),
-    ),
+    validating
+      ? loadConfig(process.argv[3] ?? 'cmdz.ts')
+      : loadConfig(process.argv[2] ?? 'cmdz.ts').pipe(
+          Effect.flatMap(terminalSession),
+          Effect.provide(telemetry),
+        ),
     { signal: controller.signal },
   )
-  if (Exit.isFailure(exit) && !controller.signal.aborted) {
+  if (validating && Exit.isSuccess(exit)) {
+    console.log('Configuration is valid.')
+  } else if (Exit.isFailure(exit) && !controller.signal.aborted) {
     console.error(formatFailureDiagnostic(exit.cause))
     process.exitCode = 1
   } else if (Exit.isFailure(exit)) {

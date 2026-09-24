@@ -76,7 +76,7 @@ const resolveConfig = Effect.fn('config.validate')(function* (
 
 export const parseConfig = (directory: string) =>
   flow(
-    Schema.decodeUnknownEffect(Schema.Array(Definition)),
+    Schema.decodeUnknownEffect(Schema.Array(Definition), { onExcessProperty: 'error' }),
     Effect.mapError(
       () =>
         new ConfigError({

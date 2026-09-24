@@ -30,13 +30,13 @@ Effect owns process and renderer cleanup; SIGINT and SIGTERM interrupt the sessi
 ## Standalone binary
 
 ```sh
-bun run build:binary
-./dist/cmdz /path/to/project/cmdz.ts
+bun run install:local
+cmdz /path/to/project/cmdz.ts
 ```
 
-The executable embeds Bun and OpenTUI's native library. Users do not need Bun, Node, or a local cmdz package to run it. Commands launched by cmdz still need their own runtimes and executables.
+This builds for the current machine and installs `cmdz` into `~/.local/bin`, which must be on your `PATH`. Re-run it after source changes to update the installed binary. Use `bun run build:binary` to build without installing, then run `./dist/cmdz`. The executable embeds Bun and OpenTUI's native library. Users do not need Bun, Node, or a local cmdz package to run it. Commands launched by cmdz still need their own runtimes and executables.
 
-At runtime, the CLI provides `import { Command } from 'cmdz'` to external TypeScript configs, including local helper modules. Other package imports must resolve from the user's project. The virtual module supplies runtime exports, not editor type declarations.
+At runtime, the CLI provides `import { Command } from 'cmdz'` to external TypeScript configs, including local helper modules. Other package imports must resolve from the user's project. The virtual module supplies runtime exports, not editor type declarations. For editor type checking, copy the repository's [`cmdz.d.ts`](cmdz.d.ts) into your project. The compiled binary does not install a TypeScript package or types into your project.
 
 The build targets the host platform. macOS builds receive ad-hoc signatures; installers, release signing, and publishing are not included yet. [GitHub Actions](.github/workflows/ci.yml) builds and smoke-tests all four macOS/Linux targets and uploads binaries with checksums. Those targets remain unverified until their jobs pass. See [release preparation and signing options](docs/releases.md).
 
@@ -63,7 +63,9 @@ export default [
 ]
 ```
 
-Save as `cmdz.ts`. `Command` only creates data. The CLI validates the entire array before opening the UI or spawning processes. Names must be unique and cwd must exist, including for optional commands.
+Save as `cmdz.ts`. `Command` only creates data. The CLI validates the entire array before opening the UI or spawning processes. Unknown fields, including misspelled options, are rejected. Names must be unique and cwd must exist, including for optional commands.
+
+Run `cmdz validate` from the project directory (or `cmdz validate /path/to/cmdz.ts`) to check the config without opening the TUI or starting child commands. It uses the same loader and validation as a normal launch, so the TypeScript config and its imports execute; use only trusted configs. A valid config exits with status 0 and an invalid or unloadable one exits with status 1. This is a runtime validator, not a TypeScript type checker.
 
 - `command`: required shell string, executed through `/bin/sh -c`; pipes and `&&` work, interactive shell aliases do not.
 - `cwd`: relative to the config file, or absolute; defaults to the config directory.
@@ -71,7 +73,7 @@ Save as `cmdz.ts`. `Command` only creates data. The CLI validates the entire arr
 - `autostart`: defaults to true and is config-only.
 - `env`: overrides the inherited environment. The runner does not load dotenv files; a child such as Bun may apply its own dotenv behavior. `TERM` is set to `xterm-256color` for the embedded terminal.
 
-By default the CLI loads `cmdz.ts` from the launch directory. Use `bun run dev /absolute/path/to/cmdz.ts` for an explicit path. The CLI supplies the `cmdz` import; external configs must resolve any other package imports themselves. Configuration is trusted TypeScript, not a sandbox. Reloading configuration requires restarting cmdz.
+By default the CLI loads `cmdz.ts` from the launch directory. Use `cmdz /absolute/path/to/cmdz.ts` for an explicit path. The CLI supplies the `cmdz` import; external configs must resolve any other package imports themselves. Configuration is trusted TypeScript, not a sandbox. Reloading configuration requires restarting cmdz.
 
 Direct dependencies:
 

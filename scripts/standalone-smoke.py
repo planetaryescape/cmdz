@@ -171,5 +171,25 @@ with tempfile.TemporaryDirectory(prefix="cmdz-standalone-") as directory:
         "  printf 'DIMS:%s\\n' \"$(stty size)\"\n"
         "done\n"
     )
+    validation_env = {"HOME": str(project), "PATH": PATH, "CMDZ_TELEMETRY": "false"}
+    valid = subprocess.run(
+        [str(binary), "validate"], cwd=project, env=validation_env, capture_output=True, text=True
+    )
+    assert valid.returncode == 0, valid.stderr
+    assert "valid" in valid.stdout, valid.stdout
+    assert not (project / "app" / "child.pid").exists(), "Validation started a child process"
+    (project / "invalid.ts").write_text(
+        "export default [{ name: 'Broken', command: 'echo hello', cwd: 'missing' }];\n"
+    )
+    invalid = subprocess.run(
+        [str(binary), "validate", str(project / "invalid.ts")],
+        cwd=project,
+        env=validation_env,
+        capture_output=True,
+        text=True,
+    )
+    assert invalid.returncode == 1, invalid
+    assert "Working directory unavailable" in invalid.stderr, invalid.stderr
+    assert not (project / "app" / "child.pid").exists(), "Validation started a child process"
     for mode in ("quit", "sigterm"):
         trial(binary, project, mode)
