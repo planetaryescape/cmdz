@@ -10,6 +10,10 @@ import {
 } from '@cmdz/core/process-driver'
 import { Effect, Layer, Option, Result, Semaphore } from 'effect'
 
+type GroupPresence = 'present' | 'absent'
+
+const postKillTimeout = '1 second'
+
 interface TerminalPort {
   readonly columns: number
   readonly rows: number
@@ -17,14 +21,87 @@ interface TerminalPort {
   readonly attach: (terminal: Bun.Terminal | undefined) => void
 }
 
-function signalGroup(pid: number, signal: NodeJS.Signals) {
-  try {
-    process.kill(-pid, signal)
-  } catch (error) {
-    if (error instanceof Error && 'code' in error && error.code === 'ESRCH') return
-    throw new ProcessCleanupError({ operation: `signal-${signal}`, processGroupId: pid })
-  }
-}
+const signalGroup = (processGroupId: number, signal: NodeJS.Signals) =>
+  Effect.try({
+    try: () => {
+      try {
+        process.kill(-processGroupId, signal)
+      } catch (error) {
+        if (error instanceof Error && 'code' in error && error.code === 'ESRCH') return
+        throw error
+      }
+    },
+    catch: () => new ProcessCleanupError({ operation: `signal-${signal}`, processGroupId }),
+  })
+
+const groupPresence = (processGroupId: number): Effect.Effect<GroupPresence, ProcessCleanupError> =>
+  Effect.try({
+    try: () => {
+      try {
+        process.kill(-processGroupId, 0)
+        return 'present' as const
+      } catch (error) {
+        if (error instanceof Error && 'code' in error && error.code === 'ESRCH')
+          return 'absent' as const
+        throw error
+      }
+    },
+    catch: () => new ProcessCleanupError({ operation: 'verify-group', processGroupId }),
+  })
+
+const waitForGroupAbsence = (processGroupId: number) =>
+  Effect.gen(function* () {
+    while ((yield* groupPresence(processGroupId)) === 'present') yield* Effect.sleep('25 millis')
+  }).pipe(
+    Effect.timeoutOption(postKillTimeout),
+    Effect.flatMap(
+      Option.match({
+        onNone: () =>
+          Effect.fail(new ProcessCleanupError({ operation: 'verify-group', processGroupId })),
+        onSome: Effect.succeed,
+      }),
+    ),
+  )
+
+const releaseGroup = (
+  processGroupId: number,
+  awaitLeader: Effect.Effect<number, ProcessCleanupError>,
+) =>
+  Effect.gen(function* () {
+    yield* signalGroup(processGroupId, 'SIGTERM')
+    const exitedAfterTerm = yield* awaitLeader.pipe(Effect.timeoutOption('3 seconds'))
+    const presenceAfterTerm = yield* groupPresence(processGroupId)
+    if (presenceAfterTerm === 'present') {
+      yield* signalGroup(processGroupId, 'SIGKILL')
+      yield* Effect.all(
+        {
+          leader: Option.isNone(exitedAfterTerm)
+            ? awaitLeader.pipe(
+                Effect.timeoutOption(postKillTimeout),
+                Effect.flatMap(
+                  Option.match({
+                    onNone: () =>
+                      Effect.fail(
+                        new ProcessCleanupError({
+                          operation: 'wait',
+                          processGroupId,
+                        }),
+                      ),
+                    onSome: Effect.succeed,
+                  }),
+                ),
+              )
+            : Effect.void,
+          group: waitForGroupAbsence(processGroupId),
+        },
+        { concurrency: 'unbounded' },
+      )
+    } else if (Option.isNone(exitedAfterTerm)) {
+      const exitedAfterGroup = yield* awaitLeader.pipe(Effect.timeoutOption(postKillTimeout))
+      if (Option.isNone(exitedAfterGroup))
+        return yield* Effect.fail(new ProcessCleanupError({ operation: 'wait', processGroupId }))
+    }
+  })
 
 function startPty(
   request: ProcessStartRequest,
@@ -65,12 +142,7 @@ function startPty(
             // The process group must be released even if the terminal adapter has already failed.
           }
         })
-        yield* Effect.sync(() => signalGroup(child.pid, 'SIGTERM'))
-        const exitedAfterTerm = yield* awaitExit.pipe(Effect.timeoutOption('3 seconds'))
-        if (Option.isNone(exitedAfterTerm)) {
-          yield* Effect.sync(() => signalGroup(child.pid, 'SIGKILL'))
-          yield* awaitExit
-        }
+        yield* releaseGroup(child.pid, awaitExit)
         const drainedTerminal = yield* Effect.promise(() => drained.promise).pipe(
           Effect.timeoutOption('1 second'),
         )
