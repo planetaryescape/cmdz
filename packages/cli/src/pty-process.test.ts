@@ -176,7 +176,7 @@ test('force-kills a TERM-ignoring group member after its leader exits', async ()
           command: [
             '/bin/sh',
             '-c',
-            "trap '' TERM HUP; while :; do :; done </dev/null >/dev/null 2>&1 & descendant=$!; printf '%s,%s\\n' $$ $descendant",
+            "trap '' TERM HUP; while :; do sleep 1; done </dev/null >/dev/null 2>&1 & descendant=$!; printf '%s,%s\\n' $$ $descendant",
           ],
           cwd: process.cwd(),
           env: process.env,

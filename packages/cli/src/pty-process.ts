@@ -38,7 +38,9 @@ const groupPresence = (processGroupId: number): Effect.Effect<GroupPresence, Pro
   Effect.try({
     try: () => {
       try {
-        process.kill(-processGroupId, 0)
+        // Bun 1.4 rejects signal 0 on Darwin. During release, SIGCONT is a safe
+        // liveness probe because any remaining member is immediately force-killed.
+        process.kill(-processGroupId, process.platform === 'darwin' ? 'SIGCONT' : 0)
         return 'present' as const
       } catch (error) {
         if (error instanceof Error && 'code' in error && error.code === 'ESRCH')
@@ -51,6 +53,8 @@ const groupPresence = (processGroupId: number): Effect.Effect<GroupPresence, Pro
 
 const waitForGroupAbsence = (processGroupId: number) =>
   Effect.gen(function* () {
+    // Zombies still belong to the group until reaped, so they intentionally keep
+    // cleanup unresolved rather than allowing a false successful release.
     while ((yield* groupPresence(processGroupId)) === 'present') yield* Effect.sleep('25 millis')
   }).pipe(
     Effect.timeoutOption(postKillTimeout),
