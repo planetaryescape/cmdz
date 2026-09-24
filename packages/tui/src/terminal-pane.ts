@@ -1,6 +1,36 @@
 import { normalizeTerminalSize } from '@cmdz/core/process-driver'
 import type { WorkspaceDefinition } from '@cmdz/core/workspace-definition'
-import { EmbeddedTerminalRenderable, type CliRenderer } from '@opentui/core'
+import {
+  EmbeddedTerminalRenderable,
+  RGBA,
+  type CliRenderer,
+  type OptimizedBuffer,
+} from '@opentui/core'
+
+import type { WorkspaceTheme } from './theme'
+
+const black = RGBA.fromHex('#000000')
+const white = RGBA.fromHex('#ffffff')
+
+function recolorTerminalDefaults(buffer: OptimizedBuffer, theme: WorkspaceTheme) {
+  const background = RGBA.fromHex(theme.canvas)
+  const foreground = RGBA.fromHex(theme.text)
+  for (const [y, line] of buffer.getSpanLines().entries()) {
+    let x = 0
+    for (const span of line.spans) {
+      if (span.bg.equals(black))
+        buffer.drawText(
+          span.text,
+          x,
+          y,
+          span.fg.equals(white) ? foreground : span.fg,
+          background,
+          span.attributes,
+        )
+      x += span.width
+    }
+  }
+}
 
 interface ProcessPaneHandlers {
   readonly onData: (
@@ -21,6 +51,7 @@ export class TerminalPane {
     private readonly renderer: CliRenderer,
     readonly index: number,
     private readonly handlers: ProcessPaneHandlers,
+    private theme: WorkspaceTheme,
   ) {
     this.terminal = this.makeTerminal()
   }
@@ -36,6 +67,11 @@ export class TerminalPane {
     return normalizeTerminalSize(screen.columns, screen.rows)
   }
 
+  setTheme(theme: WorkspaceTheme) {
+    this.theme = theme
+    this.terminal.invalidate()
+  }
+
   private makeTerminal() {
     const run = this.run
     return new EmbeddedTerminalRenderable(this.renderer, {
@@ -47,6 +83,7 @@ export class TerminalPane {
       height: '100%',
       maxScrollback: 10000,
       selectable: false,
+      renderAfter: (buffer) => recolorTerminalDefaults(buffer, this.theme),
       onData: (bytes, source) => this.handlers.onData(this.definition.name, run, bytes, source),
       onTerminalResize: (columns, rows) =>
         this.handlers.onResize(this.definition.name, Math.max(1, columns), Math.max(1, rows)),

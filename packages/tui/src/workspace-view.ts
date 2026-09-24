@@ -158,18 +158,24 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
     Queue.offerUnsafe(actions, { type: 'command', command })
   const panes = definitions.map(
     (definition, index) =>
-      new TerminalPane(definition, renderer, index, {
-        onData: (name, run, bytes, source) =>
-          offer({
-            type: 'write',
-            name,
-            source: source === 'response' ? 'terminalResponse' : 'user',
-            bytes,
-            run: source === 'response' ? run : undefined,
-          }),
-        onResize: (name, columns, rows) =>
-          offer({ type: 'resize', name, size: normalizeTerminalSize(columns, rows) }),
-      }),
+      new TerminalPane(
+        definition,
+        renderer,
+        index,
+        {
+          onData: (name, run, bytes, source) =>
+            offer({
+              type: 'write',
+              name,
+              source: source === 'response' ? 'terminalResponse' : 'user',
+              bytes,
+              run: source === 'response' ? run : undefined,
+            }),
+          onResize: (name, columns, rows) =>
+            offer({ type: 'resize', name, size: normalizeTerminalSize(columns, rows) }),
+        },
+        theme,
+      ),
   )
   const panesByName = new Map(panes.map((pane) => [pane.definition.name, pane]))
   for (const pane of panes) body.add(pane.terminal)
@@ -236,6 +242,7 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
     sidebar.backgroundColor = theme.surface
     sidebar.borderColor = theme.border
     emptyStateText.fg = theme.muted
+    for (const pane of panes) pane.setTheme(theme)
     for (const heading of sectionHeaders.values()) heading.fg = theme.muted
     help.refresh(theme)
   }
