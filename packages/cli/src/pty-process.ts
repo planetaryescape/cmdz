@@ -38,9 +38,9 @@ const groupPresence = (processGroupId: number): Effect.Effect<GroupPresence, Pro
   Effect.try({
     try: () => {
       try {
-        // Bun 1.4 rejects signal 0 on Darwin. During release, SIGCONT is a safe
-        // liveness probe because any remaining member is immediately force-killed.
-        process.kill(-processGroupId, process.platform === 'darwin' ? 'SIGCONT' : 0)
+        // Bun 1.4 rejects signal 0 on Darwin. Repeating SIGTERM is safe during
+        // release because any remaining member has already ignored the first one.
+        process.kill(-processGroupId, process.platform === 'darwin' ? 'SIGTERM' : 0)
         return 'present' as const
       } catch (error) {
         if (error instanceof Error && 'code' in error && error.code === 'ESRCH')
