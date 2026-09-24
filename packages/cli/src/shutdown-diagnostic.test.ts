@@ -38,13 +38,35 @@ test('reports every unresolved process group without process data', () => {
 })
 
 test('finds shutdown cleanup failure when another failure occurred first', () => {
-  const shutdown = new WorkspaceShutdownError({ failures: [] })
+  const firstShutdown = new WorkspaceShutdownError({
+    failures: [
+      {
+        name: 'Web',
+        run: 3,
+        operation: 'signal-SIGKILL',
+        processGroupId: 4312,
+        target: PaneOutcome.Stopped(),
+      },
+    ],
+  })
+  const secondShutdown = new WorkspaceShutdownError({
+    failures: [{ name: 'Worker', run: 2, operation: 'drain', target: PaneOutcome.Stopped() }],
+  })
   const cause = Cause.combine(
-    Cause.fail(new WorkspaceCommandError({ reason: 'workspaceAlreadyInitialized' })),
-    Cause.fail(shutdown),
+    Cause.combine(
+      Cause.fail(new WorkspaceCommandError({ reason: 'workspaceAlreadyInitialized' })),
+      Cause.fail(firstShutdown),
+    ),
+    Cause.fail(secondShutdown),
   )
 
-  expect(findShutdownError(cause)).toBe(shutdown)
-  expect(formatFailureDiagnostic(cause)).toContain('WorkspaceCommandError')
-  expect(formatFailureDiagnostic(cause)).toContain('cmdz could not clean up every process.')
+  expect(findShutdownError(cause)?.failures).toEqual([
+    ...firstShutdown.failures,
+    ...secondShutdown.failures,
+  ])
+  const diagnostic = formatFailureDiagnostic(cause)
+  expect(diagnostic).toContain('WorkspaceCommandError')
+  expect(diagnostic).toContain('Web run 3')
+  expect(diagnostic).toContain('Worker run 2')
+  expect(diagnostic.match(/cmdz could not clean up every process\./g)).toHaveLength(1)
 })

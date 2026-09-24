@@ -2,18 +2,22 @@ import { WorkspaceShutdownError } from '@cmdz/core/workspace'
 import { Cause } from 'effect'
 
 export function findShutdownError(cause: Cause.Cause<unknown>) {
+  let found: WorkspaceShutdownError | undefined
   for (const reason of cause.reasons) {
-    if (Cause.isFailReason(reason) && reason.error instanceof WorkspaceShutdownError)
-      return reason.error
+    if (Cause.isFailReason(reason) && reason.error instanceof WorkspaceShutdownError) {
+      found = found
+        ? new WorkspaceShutdownError({ failures: [...found.failures, ...reason.error.failures] })
+        : reason.error
+    }
   }
-  return undefined
+  return found
 }
 
 export function formatFailureDiagnostic(cause: Cause.Cause<unknown>) {
   const shutdownError = findShutdownError(cause)
   if (!shutdownError) return Cause.pretty(cause)
   const otherReasons = cause.reasons.filter(
-    (reason) => !(Cause.isFailReason(reason) && reason.error === shutdownError),
+    (reason) => !(Cause.isFailReason(reason) && reason.error instanceof WorkspaceShutdownError),
   )
   const shutdownDiagnostic = formatShutdownDiagnostic(shutdownError)
   return otherReasons.length === 0
