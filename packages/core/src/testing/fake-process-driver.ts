@@ -97,6 +97,7 @@ export function makeRecordingProcessDriver(): RecordingProcessDriver {
           recorded.sizes.push(size)
         }),
       awaitExit: Deferred.await(exited),
+      forceCleanup: Effect.void,
       cleanup: cleanupLock.withPermit(
         Effect.gen(function* () {
           if (cleaned) return

@@ -126,6 +126,8 @@ export interface WorkspaceController {
     command: WorkspaceCommand,
   ) => Effect.Effect<WorkspaceSnapshot, WorkspaceCommandError | ProcessIoError>
   readonly shutdown: Effect.Effect<void, WorkspaceShutdownError>
+  /** Requests force cleanup for owned processes, including those awaiting shutdown. */
+  readonly forceShutdown: Effect.Effect<void>
 }
 
 type InternalPaneLifecycle =
@@ -585,6 +587,19 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
     )
   }
 
+  let forceRequested = false
+  const forceShutdown = Effect.gen(function* () {
+    forceRequested = true
+    const current = yield* SubscriptionRef.get(state)
+    yield* Effect.all(
+      current.panes.flatMap((pane) =>
+        pane.lifecycle._tag === 'Running' || pane.lifecycle._tag === 'Cleaning'
+          ? [pane.lifecycle.process.forceCleanup]
+          : [],
+      ),
+      { concurrency: 'unbounded' },
+    )
+  })
   const shutdownEffect = lifecycle.withPermit(
     Effect.gen(function* () {
       yield* SubscriptionRef.update(state, (current): ControllerState => ({
@@ -607,6 +622,7 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
         const { name } = ownedPane
         const owned = ownedPane.lifecycle
         const target = owned._tag === 'Cleaning' ? owned.target : PaneOutcome.Stopped()
+        if (forceRequested) yield* owned.process.forceCleanup
         yield* setPaneLifecycle(
           name,
           owned.run,
@@ -663,5 +679,6 @@ export const createWorkspaceController = Effect.fn('workspace.controller.make')(
     initialize,
     dispatch,
     shutdown,
+    forceShutdown,
   }
 })

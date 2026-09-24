@@ -47,6 +47,8 @@ export interface ProcessRun {
   readonly awaitExit: Effect.Effect<number, ProcessRuntimeError>
   /** Releases this run's resources; repeated or concurrent evaluations must safely coalesce. */
   readonly cleanup: Effect.Effect<void, ProcessCleanupError>
+  /** Requests immediate escalation to SIGKILL if graceful cleanup cannot finish. */
+  readonly forceCleanup: Effect.Effect<void>
 }
 
 export interface ProcessDriverService {

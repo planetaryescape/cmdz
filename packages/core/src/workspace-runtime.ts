@@ -18,6 +18,8 @@ export interface WorkspaceRuntime {
   ) => Effect.Effect<WorkspaceSnapshot, WorkspaceCommandError>
   readonly dispatch: WorkspaceController['dispatch']
   readonly shutdown: Effect.Effect<void, WorkspaceShutdownError>
+  /** Forwards an explicit force-quit request to the workspace controller. */
+  readonly forceShutdown: Effect.Effect<void>
 }
 
 /** Creates the controller runtime consumed by workspace adapters. */
@@ -26,4 +28,5 @@ export const createWorkspaceRuntime = (controller: WorkspaceController) =>
     initialize: controller.initialize,
     dispatch: controller.dispatch,
     shutdown: controller.shutdown,
+    forceShutdown: controller.forceShutdown,
   } satisfies WorkspaceRuntime)

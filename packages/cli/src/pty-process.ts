@@ -8,11 +8,12 @@ import {
   type ProcessStartRequest,
   normalizeTerminalSize,
 } from '@cmdz/core/process-driver'
-import { Effect, Layer, Option, Result, Semaphore } from 'effect'
+import { Deferred, Effect, Layer, Option, Result, Semaphore } from 'effect'
 
 type GroupPresence = 'present' | 'absent'
 
 const postKillTimeout = '3 seconds'
+const gracefulShutdownTimeout = '1 minute'
 
 interface TerminalPort {
   readonly columns: number
@@ -65,52 +66,39 @@ const groupPresence = (processGroupId: number): Effect.Effect<GroupPresence, Pro
 
 const waitForGroupAbsence = (processGroupId: number) =>
   Effect.gen(function* () {
-    while ((yield* groupPresence(processGroupId)) === 'present') yield* Effect.sleep('25 millis')
-  }).pipe(
-    Effect.timeoutOption(postKillTimeout),
-    Effect.flatMap(
-      Option.match({
-        onNone: () =>
-          Effect.fail(new ProcessCleanupError({ operation: 'verify-group', processGroupId })),
-        onSome: Effect.succeed,
-      }),
-    ),
-  )
+    while ((yield* groupPresence(processGroupId)) === 'present') yield* Effect.sleep('100 millis')
+  })
 
 const releaseGroup = (
   processGroupId: number,
   awaitLeader: Effect.Effect<number, ProcessCleanupError>,
+  force: Effect.Effect<void>,
 ) =>
   Effect.gen(function* () {
     yield* signalGroup(processGroupId, 'SIGTERM')
-    const exitedAfterTerm = yield* awaitLeader.pipe(Effect.timeoutOption('3 seconds'))
-    const presenceAfterTerm = yield* groupPresence(processGroupId)
-    if (presenceAfterTerm === 'present') {
+    const graceful = yield* Effect.race(
+      waitForGroupAbsence(processGroupId).pipe(Effect.as('exited')),
+      force.pipe(Effect.as('forced')),
+    ).pipe(Effect.timeoutOption(gracefulShutdownTimeout))
+    if (Option.isNone(graceful) || graceful.value === 'forced') {
       yield* signalGroup(processGroupId, 'SIGKILL')
       yield* Effect.all(
         {
-          leader: Option.isNone(exitedAfterTerm)
-            ? awaitLeader.pipe(
-                Effect.timeoutOption(postKillTimeout),
-                Effect.flatMap(
-                  Option.match({
-                    onNone: () =>
-                      Effect.fail(
-                        new ProcessCleanupError({
-                          operation: 'wait',
-                          processGroupId,
-                        }),
-                      ),
-                    onSome: Effect.succeed,
-                  }),
-                ),
-              )
-            : Effect.void,
+          leader: awaitLeader,
           group: waitForGroupAbsence(processGroupId),
         },
         { concurrency: 'unbounded' },
+      ).pipe(
+        Effect.timeoutOption(postKillTimeout),
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              Effect.fail(new ProcessCleanupError({ operation: 'verify-group', processGroupId })),
+            onSome: Effect.succeed,
+          }),
+        ),
       )
-    } else if (Option.isNone(exitedAfterTerm)) {
+    } else {
       const exitedAfterGroup = yield* awaitLeader.pipe(Effect.timeoutOption(postKillTimeout))
       if (Option.isNone(exitedAfterGroup))
         return yield* Effect.fail(new ProcessCleanupError({ operation: 'wait', processGroupId }))
@@ -146,6 +134,7 @@ function startPty(
     })
 
     const cleanupLock = yield* Semaphore.make(1)
+    const force = yield* Deferred.make<void>()
     let cleaned = false
     const awaitExit = Effect.tryPromise({
       try: () => child.exited,
@@ -161,7 +150,7 @@ function startPty(
             // The process group must be released even if the terminal adapter has already failed.
           }
         })
-        yield* releaseGroup(child.pid, awaitExit)
+        yield* releaseGroup(child.pid, awaitExit, Deferred.await(force))
         const drainedTerminal = yield* Effect.promise(() => drained.promise).pipe(
           Effect.timeoutOption('1 second'),
         )
@@ -177,6 +166,7 @@ function startPty(
     )
 
     if (!child.terminal) {
+      yield* Deferred.succeed(force, undefined)
       const cleanupResult = yield* Effect.result(cleanup)
       if (Result.isFailure(cleanupResult))
         return yield* Effect.fail(
@@ -194,6 +184,7 @@ function startPty(
       }),
     )
     if (Result.isFailure(attached)) {
+      yield* Deferred.succeed(force, undefined)
       const cleanupResult = yield* Effect.result(cleanup)
       if (Result.isFailure(cleanupResult))
         return yield* Effect.fail(
@@ -239,6 +230,7 @@ function startPty(
         }),
       ),
       cleanup,
+      forceCleanup: Deferred.succeed(force, undefined).pipe(Effect.asVoid),
     }
     yield* Effect.logInfo('Process started').pipe(
       Effect.annotateLogs({ 'command.name': request.name }),

@@ -117,7 +117,7 @@ test('interrupting a run terminates its process group and closes the PTY', async
   expect(descendant.stdout.toString().trim().replace(/^Z.*$/, '')).toBe('')
 }, 8000)
 
-test('forces a TERM-ignoring process group down and deduplicates cleanup', async () => {
+test('waits for explicit force before killing a TERM-ignoring process group', async () => {
   let childPid = 0
   let descendantPid = 0
   const result = await Effect.runPromise(
@@ -146,20 +146,53 @@ test('forces a TERM-ignoring process group down and deduplicates cleanup', async
         },
       })
       yield* Deferred.await(ready)
-      const started = performance.now()
-      yield* Effect.all([run.cleanup, run.cleanup], { concurrency: 'unbounded' })
+      const cleanup = yield* Effect.all([run.cleanup, run.cleanup], {
+        concurrency: 'unbounded',
+      }).pipe(Effect.forkScoped)
+      expect(() => process.kill(childPid, 0)).not.toThrow()
+      yield* run.forceCleanup
+      yield* Fiber.join(cleanup)
       yield* run.cleanup
-      return { elapsed: performance.now() - started, exitCode: yield* run.awaitExit }
-    }),
+      return { exitCode: yield* run.awaitExit }
+    }).pipe(Effect.scoped),
   )
 
   expect(result.exitCode).not.toBe(0)
-  expect(result.elapsed).toBeGreaterThanOrEqual(2800)
   expect(childPid).toBeGreaterThan(0)
   expect(descendantPid).toBeGreaterThan(0)
   expect(() => process.kill(childPid, 0)).toThrow()
   const descendant = Bun.spawnSync(['ps', '-o', 'stat=', '-p', String(descendantPid)])
   expect(descendant.stdout.toString().trim().replace(/^Z.*$/, '')).toBe('')
+}, 8000)
+
+test('lets a child finish graceful cleanup beyond three seconds', async () => {
+  let output = ''
+  const code = await Effect.runPromise(
+    Effect.gen(function* () {
+      const ready = yield* Deferred.make<void>()
+      const run = yield* makePtyProcessDriver().start({
+        name: 'slow-cleanup',
+        run: 1,
+        command: [
+          process.execPath,
+          '-e',
+          'process.on("SIGTERM", () => setTimeout(() => { console.log("CLEANUP_DONE"); process.exit(0) }, 3200)); console.log("READY"); await new Promise(() => {});',
+        ],
+        cwd: process.cwd(),
+        env: process.env,
+        size: { columns: 80, rows: 24 },
+        output: (bytes) => {
+          output += new TextDecoder().decode(bytes)
+          if (output.includes('READY')) Effect.runSync(Deferred.succeed(ready, undefined))
+        },
+      })
+      yield* Deferred.await(ready)
+      yield* run.cleanup
+      return yield* run.awaitExit
+    }),
+  )
+  expect(code).toBe(0)
+  expect(output).toContain('CLEANUP_DONE')
 }, 8000)
 
 test('force-kills a TERM-ignoring group member after its leader exits', async () => {
@@ -194,6 +227,7 @@ test('force-kills a TERM-ignoring group member after its leader exits', async ()
         yield* Deferred.await(ready)
         expect(yield* run.awaitExit).toBe(0)
         expect(() => process.kill(-leaderPid, 0)).not.toThrow()
+        yield* run.forceCleanup
         yield* run.cleanup
       }),
     )

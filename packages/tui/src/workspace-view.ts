@@ -77,6 +77,12 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
 ) {
   const runtime = yield* createWorkspaceRuntime(controller)
   const actions = yield* Queue.unbounded<UiAction>()
+  const forceActions = yield* Queue.unbounded<void>()
+  let quitting = false
+  yield* Queue.take(forceActions).pipe(
+    Effect.flatMap(() => runtime.forceShutdown),
+    Effect.forkScoped,
+  )
   let theme = workspaceTheme(renderer.themeMode)
   const frame = new BoxRenderable(renderer, {
     id: 'workspace-frame',
@@ -244,9 +250,11 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
     sidebar.visible = snapshot.sidebarVisible
     sidebar.width = renderer.terminalWidth < 58 ? 20 : 27
     hint.visible = snapshot.sidebarVisible && !help.visible
-    hint.content = input
-      ? t`${fg(theme.accent)('ctrl-z')} ${fg(theme.muted)('nav')}   ${fg(theme.accent)('ctrl-c')} ${fg(theme.muted)('stop')}   ${fg(theme.accent)('?')} ${fg(theme.muted)('help')}`
-      : t`${fg(theme.accent)('q')} ${fg(theme.muted)('quit')}   ${fg(theme.accent)('?')} ${fg(theme.muted)('help')}`
+    hint.content = quitting
+      ? t`${fg(theme.muted)('stopping commands')}   ${fg(theme.accent)('ctrl-c')} ${fg(theme.muted)('force quit')}`
+      : input
+        ? t`${fg(theme.accent)('ctrl-z')} ${fg(theme.muted)('nav')}   ${fg(theme.accent)('ctrl-c')} ${fg(theme.muted)('stop')}   ${fg(theme.accent)('?')} ${fg(theme.muted)('help')}`
+        : t`${fg(theme.accent)('q')} ${fg(theme.muted)('quit')}   ${fg(theme.accent)('?')} ${fg(theme.muted)('help')}`
     for (const child of sidebar.getChildren()) sidebar.remove(child)
     for (const { key } of sections) {
       const sectionPanes = panes.filter((pane) => sectionForPane(pane) === key)
@@ -329,6 +337,12 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
   yield* Effect.yieldNow
 
   const onKey = (keyEvent: KeyEvent) => {
+    if (quitting && keyEvent.ctrl && keyEvent.name === 'c') {
+      Queue.offerUnsafe(forceActions, undefined)
+      keyEvent.preventDefault()
+      keyEvent.stopPropagation()
+      return
+    }
     const selected = panesByName.get(pendingSelected)
     const state = snapshot.panes.find((pane) => pane.name === pendingSelected)
     if (!selected || !state) return
@@ -364,8 +378,11 @@ export const renderWorkspaceView = Effect.fn('workspace.view.render')(function* 
     } else if (keyEvent.name === 'x') offer({ type: 'stop', name: selected.definition.name })
     else if (keyEvent.name === 'r')
       offer({ type: 'restart', name: selected.definition.name, size: selected.size() })
-    else if (keyEvent.name === 'q' || (keyEvent.ctrl && keyEvent.name === 'c'))
+    else if (keyEvent.name === 'q' || (keyEvent.ctrl && keyEvent.name === 'c')) {
+      quitting = true
+      draw()
       Queue.offerUnsafe(actions, { type: 'quit' })
+    }
     keyEvent.preventDefault()
     keyEvent.stopPropagation()
   }
