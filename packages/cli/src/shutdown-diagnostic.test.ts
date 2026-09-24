@@ -3,7 +3,11 @@ import { expect, test } from 'bun:test'
 import { PaneOutcome, WorkspaceCommandError, WorkspaceShutdownError } from '@cmdz/core/workspace'
 import { Cause } from 'effect'
 
-import { findShutdownError, formatShutdownDiagnostic } from './shutdown-diagnostic'
+import {
+  findShutdownError,
+  formatFailureDiagnostic,
+  formatShutdownDiagnostic,
+} from './shutdown-diagnostic'
 
 test('reports every unresolved process group without process data', () => {
   const diagnostic = formatShutdownDiagnostic(
@@ -41,4 +45,6 @@ test('finds shutdown cleanup failure when another failure occurred first', () =>
   )
 
   expect(findShutdownError(cause)).toBe(shutdown)
+  expect(formatFailureDiagnostic(cause)).toContain('WorkspaceCommandError')
+  expect(formatFailureDiagnostic(cause)).toContain('cmdz could not clean up every process.')
 })

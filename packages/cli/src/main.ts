@@ -1,8 +1,12 @@
-import { Cause, Effect, Exit } from 'effect'
+import { Effect, Exit } from 'effect'
 
 import { Command } from './command'
 import { loadConfig } from './config'
-import { findShutdownError, formatShutdownDiagnostic } from './shutdown-diagnostic'
+import {
+  findShutdownError,
+  formatFailureDiagnostic,
+  formatShutdownDiagnostic,
+} from './shutdown-diagnostic'
 import { telemetry } from './telemetry'
 import { terminalSession } from './terminal-session'
 
@@ -28,10 +32,7 @@ try {
     { signal: controller.signal },
   )
   if (Exit.isFailure(exit) && !controller.signal.aborted) {
-    const shutdownError = findShutdownError(exit.cause)
-    console.error(
-      shutdownError ? formatShutdownDiagnostic(shutdownError) : Cause.pretty(exit.cause),
-    )
+    console.error(formatFailureDiagnostic(exit.cause))
     process.exitCode = 1
   } else if (Exit.isFailure(exit)) {
     const shutdownError = findShutdownError(exit.cause)
